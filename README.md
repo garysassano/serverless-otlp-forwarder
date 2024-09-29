@@ -1,6 +1,6 @@
 # Lambda OTLP Forwarder
 
-![diagram](https://github.com/user-attachments/assets/ed033397-cb35-4ad8-a577-e1f5f62dd3c1)
+![diagram](https://github.com/user-attachments/assets/f3b5f009-e4bf-4bb8-bbe2-b585235f20c7)
 The Lambda OTLP Forwarder is a serverless solution designed to forward OpenTelemetry Protocol (OTLP) formatted logs from AWS CloudWatch to an OTLP collector. This project consists of two main components:
 
 1. A Rust-based AWS Lambda function that processes and forwards logs
