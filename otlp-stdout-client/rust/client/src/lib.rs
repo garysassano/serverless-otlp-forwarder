@@ -7,6 +7,13 @@
 //! in an OpenTelemetry OTLP pipeline to send OTLP data (both JSON and Protobuf formats)
 //! to stdout. This allows the data to be easily ingested and forwarded to an OTLP collector.
 //!
+//! ## Note on Dependencies
+//!
+//! This crate currently includes a local implementation of the `LambdaResourceDetector`
+//! from the `opentelemetry-aws` crate. This is a temporary measure while waiting for the
+//! `opentelemetry-aws` crate to be updated to version 0.13.0. Once the update is available,
+//! this local implementation will be removed in favor of the official crate dependency.
+//!
 //! ## Key Features
 //!
 //! - Implements `opentelemetry_http::HttpClient` for use in OTLP pipelines
@@ -49,8 +56,9 @@
 //!   Valid values are:
 //!   - "http/json" (default): Uses HTTP with JSON payload
 //!   - "http/protobuf": Uses HTTP with Protobuf payload
-//!   If not set or set to an unsupported value, defaults to "http/json".
-//!   The output will be written to stdout in the format specified by the protocol.
+//! 
+//!     If not set or set to an unsupported value, defaults to "http/json".
+//!     The output will be written to stdout in the format specified by the protocol.
 //!
 //! - `OTEL_EXPORTER_OTLP_ENDPOINT`: Sets the endpoint for the OTLP exporter.
 //!   Specify the endpoint of your OTLP collector.
@@ -70,8 +78,9 @@
 //!   Valid values are:
 //!   - "gzip": Compresses the payload using GZIP
 //!   - If not set or any other value, no compression is applied
-//!   If you specify a compression algorithm, the payload will be compressed before being written to stdout, and encoded as base64.
-//!   The `content-encoding` header will be also added as a field that can be used by the forwarder to determine the compression algorithm to both decode the payload and set the correct `Content-Encoding` header in the request to the collector.
+//! 
+//!     If you specify a compression algorithm, the payload will be compressed before being written to stdout, and encoded as base64.
+//!     The `content-encoding` header will be also added as a field that can be used by the forwarder to determine the compression algorithm to both decode the payload and set the correct `Content-Encoding` header in the request to the collector.
 //!   
 //! - `OTEL_SERVICE_NAME`: Sets the service name for the Lambda function.
 //!   If not set, falls back to the name of the lambda function.
@@ -92,7 +101,6 @@ use flate2::{write::GzEncoder, Compression};
 use http::{Request, Response};
 use opentelemetry::trace::TraceError;
 use opentelemetry::KeyValue;
-use opentelemetry_aws::detector::LambdaResourceDetector;
 use opentelemetry_http::HttpClient;
 use opentelemetry_otlp::Protocol;
 use opentelemetry_sdk::{
@@ -108,6 +116,9 @@ use std::{
     io::{self, Write},
 };
 use tracing::warn;
+
+mod lambda_detector;
+use lambda_detector::LambdaResourceDetector;
 
 // Constants for content types
 const CONTENT_TYPE_JSON: &str = "application/json";
