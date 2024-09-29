@@ -1,0 +1,11 @@
+version = 0.1
+[default.global.parameters]
+stack_name = "lambda-otlp-forwarder"
+beta_features = "yes"
+
+[default.deploy.parameters]
+stack_name = "lambda-otlp-forwarder"
+resolve_s3 = true
+s3_prefix = "lambda-otlp-forwarder"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"

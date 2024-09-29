@@ -1,0 +1,74 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: AWS SAM template for the lambda-otlp-forwarder application.
+
+Parameters:
+  RouteAllLogs:
+    Type: String
+    Default: 'true'
+    Description: 'Route all AWS logs to the Lambda function'
+
+Conditions:
+  RouteAllLogs: !Equals [!Ref RouteAllLogs, 'true']
+
+Globals:
+  Function:
+    MemorySize: 128
+    Architectures:
+      - arm64
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: INFO
+      SystemLogLevel: INFO
+
+
+Resources:
+  LogProcessorFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-log-processor'
+      CodeUri: ./forwarder/
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Description: !Sub 'Processes logs from AWS Account ${AWS::AccountId}'
+      Environment:
+        Variables:
+          RUST_LOG: lambda-otlp-forwarder=info
+          OTEL_EXPORTER_OTLP_HEADERS: !Sub '{{resolve:secretsmanager:keys/collector}}'
+
+
+  LogProcessorFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LogProcessorFunction
+      Action: lambda:InvokeFunction
+      Principal: logs.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+
+
+  LogsAccountPolicy:
+    Type: AWS::Logs::AccountPolicy
+    Condition: RouteAllLogs
+    DependsOn:
+      - LogProcessorFunctionPermission
+    Properties:
+      PolicyName: "LambdaSubscriptionPolicy"
+      PolicyDocument: 
+        Fn::Sub: |
+          {
+            "DestinationArn": "${LogProcessorFunction.Arn}",
+            "FilterPattern": "{ $._otel = * }",
+            "Distribution": "Random"
+          }
+      PolicyType: "SUBSCRIPTION_FILTER_POLICY"
+      Scope: "ALL"
+      SelectionCriteria: !Sub "LogGroupName NOT IN [\"/aws/${LogProcessorFunction}\"]"
+
+
+
+Outputs:
+  LambdaFunctionArn:
+    Description: 'ARN of the Lambda function'
+    Value: !GetAtt LogProcessorFunction.Arn

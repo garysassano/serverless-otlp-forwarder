@@ -1,0 +1,6 @@
+{
+    "rust-analyzer.linkedProjects": [
+        "otlp-stdout-client/rust/client/Cargo.toml"
+    ],
+    "rust-analyzer.cargo.features": "all"
+}
