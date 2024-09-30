@@ -5,7 +5,7 @@
 The Lambda OTLP Forwarder is a serverless solution designed to forward OpenTelemetry Protocol (OTLP) formatted logs from AWS CloudWatch to an OTLP collector. This project consists of two main components:
 
 1. A Rust-based AWS Lambda function that processes and forwards logs
-2. A custom OpenTelemetry exporter library (`otlp-stdout-client`) that formats logs for the forwarder
+2. A custom OpenTelemetry exporter library ([otlp-stdout-client](otlp-stdout-client/rust/client)) that formats logs for the forwarder
 
 ## Motivation
 
@@ -69,16 +69,17 @@ Please note that the variables above are only used for the LogProcessor function
 ## Configuring your own applications
 
 At this stage, only Rust lambda functions are supported, but the plan is to add support for other runtimes in the future. All you need to do is to add the `otlp-stdout-client` library to your project and initialize the tracer provider with the correct configuration.
+
 > [!NOTE]
-> The `otlp-stdout-client` library is in the process of being published to crates.io. In the meantime, you can use the library as a local crate or add the source code to your project.
+> The `otlp-stdout-client` library currently includes a local implementation of the `LambdaResourceDetector` from the `opentelemetry-aws` crate. This is a temporary measure while waiting for the `opentelemetry-aws` crate to be updated to version 0.13.0. Once the update is available, this local implementation will be removed in favor of the official crate dependency.
 
 ### Sending logs
 
-To send logs that can be processed by the forwarder, use the `otlp-stdout-client` library in your Rust applications. Add it to your `Cargo.toml`:
+To send logs that can be processed by the forwarder, use the [otlp-stdout-client](https://crates.io/crates/otlp-stdout-client) library in your Rust applications. Add it to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-otlp-stdout-client = "0.1.0"
+otlp-stdout-client = "0.1.1"
 ```
 
 Then, use it in your code:
@@ -116,7 +117,7 @@ The Lambda function code is located in the `forwarder` directory. To make change
 
 ### otlp-stdout-client
 
-The `otlp-stdout-client` library is located in the `otlp-stdout-client` directory. To make changes:
+The `otlp-stdout-client` library is located in the [otlp-stdout-client/rust/client](otlp-stdout-client/rust/client) directory. To make changes:
 
 1. Navigate to the `otlp-stdout-client/rust/client` directory
 2. Make your changes
