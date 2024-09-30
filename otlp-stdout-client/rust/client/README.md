@@ -20,7 +20,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-cw_otlp_exporter = "0.1.0"
+otlp-stdout-client = "0.1.1"
 ```
 
 This will include both tracing and metrics functionality by default.
@@ -31,7 +31,7 @@ If you want to use only the tracing functionality and opt out of metrics, you ca
 
 ```toml
 [dependencies]
-cw_otlp_exporter = { version = "0.1.0", default-features = false, features = ["trace"] }
+otlp-stdout-client = { version = "0.1.1", default-features = false, features = ["trace"] }
 ```
 
 ## Examples
@@ -39,7 +39,7 @@ cw_otlp_exporter = { version = "0.1.0", default-features = false, features = ["t
 ### Using tracing
 
 ```rust
-use cw_otlp_exporter::init_tracer_provider;
+use otlp_stdout_client::init_tracer_provider;
 use opentelemetry::trace::TracerProvider;
 
 #[tokio::main]
@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Using metrics (when enabled)
 
 ```rust
-use cw_otlp_exporter::init_meter_provider;
+use otlp_stdout_client::init_meter_provider;
 use opentelemetry::metrics::MeterProvider;
 
 #[tokio::main]

@@ -1,6 +1,6 @@
 [package]
 name = "otlp-stdout-client"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Alessandro Bologna <alessandro.bologna@gmail.com>"]
 description = "A custom HTTP client for OpenTelemetry OTLP exporters in serverless environments, writing to stdout for easy integration with AWS Lambda and forwarding to collectors"
