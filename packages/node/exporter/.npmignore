@@ -1,0 +1,15 @@
+src/
+coverage/
+examples/
+jest.config.*
+.eslintrc*
+tsconfig.json
+*.test.ts
+*.spec.ts
+__tests__/
+.github/
+*.map
+dist/src/
+dist/examples/
+dist/package.json
+*.tsbuildinfo

@@ -1,0 +1,68 @@
+{
+  "name": "@dev7a/otlp-stdout-exporter",
+  "version": "0.1.0",
+  "description": "OpenTelemetry OTLP exporter that writes to stdout",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "npm run clean && tsc -p tsconfig.json && echo 'Build completed successfully'",
+    "clean": "rm -rf dist",
+    "test": "jest",
+    "lint": "eslint src/*.ts src/**/*.ts --quiet",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm test && npm run lint"
+  },
+  "keywords": [
+    "opentelemetry",
+    "nodejs",
+    "tracing",
+    "lambda",
+    "serverless",
+    "aws"
+  ],
+  "author": {
+    "name": "Alessandro Bologna",
+    "email": "alessandro.bologna@gmail.com"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dev7a/lambda-otlp-forwarder.git",
+    "directory": "packages/node/exporter"
+  },
+  "homepage": "https://github.com/dev7a/lambda-otlp-forwarder/tree/main/packages/node/exporter",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "dependencies": {
+    "@opentelemetry/core": "^1.27.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.54.0",
+    "@opentelemetry/otlp-exporter-base": "^0.54.0",
+    "@opentelemetry/otlp-transformer": "^0.54.0",
+    "@opentelemetry/resources": "^1.27.0",
+    "@opentelemetry/sdk-trace-base": "^1.27.0",
+    "@opentelemetry/semantic-conventions": "^1.27.0"
+  },
+  "peerDependencies": {
+    "@opentelemetry/api": "^1.8.0"
+  },
+  "devDependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/sdk-trace-node": "^1.27.0",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.11.0",
+    "@typescript-eslint/eslint-plugin": "^8.11.0",
+    "@typescript-eslint/parser": "^8.11.0",
+    "eslint": "^8.56.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  }
+}

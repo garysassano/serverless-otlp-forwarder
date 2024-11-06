@@ -33,3 +33,8 @@ __pycache__/
 
 # Node.js build artifacts
 node_modules/
+
+# python artifacts
+__pycache__/
+*.pyc
+.ruff_cache/

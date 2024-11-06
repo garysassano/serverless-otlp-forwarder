@@ -1,0 +1,188 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: AWS SAM template for the lambda-otlp-forwarder application.
+
+Parameters:
+  NestedStackName:
+    Type: String
+    Description: The name of the nested stack
+  ExporterEndpoint:
+    Type: String
+    Description: The endpoint of the OTLP exporter
+  TracingEnabled:
+    Type: String
+    Description: Whether to enable X-Ray tracing
+    Default: false
+
+Conditions:
+  TracingEnabled: !Equals [!Ref TracingEnabled, true]
+
+Globals:
+  Function:
+    MemorySize: 128
+    Architectures:
+      - arm64
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: INFO
+      SystemLogLevel: WARN
+    Tracing: !If [TracingEnabled, Active, PassThrough]
+  
+
+Resources:
+  BackendApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub '${NestedStackName}-api'
+      StageName: prod
+      TracingEnabled: !Ref TracingEnabled
+      EndpointConfiguration:
+        Type: REGIONAL
+
+  BackendLambdaFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: backend
+    Properties:
+      FunctionName: !Sub '${NestedStackName}-lambda-backend'
+      CodeUri: ./rust
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Description: 'Demo Backend Lambda function to showcase OpenTelemetry integration'
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+      Environment:
+        Variables:
+          RUST_LOG: info
+          OTEL_EXPORTER_OTLP_ENDPOINT: !Ref ExporterEndpoint
+          OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+          OTEL_EXPORTER_OTLP_COMPRESSION: gzip
+          OTEL_SERVICE_NAME: !Sub '${NestedStackName}-lambda-backend'
+          TABLE_NAME: !Sub '${NestedStackName}-table'
+      Events:
+        PostQuote:
+          Type: Api
+          Properties:
+            Path: /quotes
+            Method: post
+            RestApiId: !Ref BackendApi
+        GetQuote:
+          Type: Api
+          Properties:
+            Path: /quotes/{id}
+            Method: get
+            RestApiId: !Ref BackendApi
+        ListQuotes:
+          Type: Api
+          Properties:
+            Path: /quotes
+            Method: get
+            RestApiId: !Ref BackendApi
+
+  FrontendLambdaFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: frontend
+    Properties:
+      FunctionName: !Sub '${NestedStackName}-lambda-frontend'
+      CodeUri: ./rust
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Description: 'Demo Frontend Lambda function to showcase OpenTelemetry integration'
+      FunctionUrlConfig:
+        AuthType: NONE
+      Environment:
+        Variables:
+          RUST_LOG: info
+          OTEL_EXPORTER_OTLP_ENDPOINT: !Ref ExporterEndpoint
+          OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+          OTEL_EXPORTER_OTLP_COMPRESSION: gzip
+          OTEL_SERVICE_NAME: !Sub '${NestedStackName}-lambda-frontend'
+          TARGET_URL: !Sub 'https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod'
+
+
+  PythonLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${NestedStackName}-python-client'
+      CodeUri: ./python
+      Handler: main.lambda_handler
+      Runtime: python3.12
+      Description: 'Demo Python Client Lambda function to showcase OpenTelemetry integration'
+      Environment:
+        Variables:
+          OTEL_EXPORTER_OTLP_ENDPOINT: !Ref ExporterEndpoint
+          OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+          OTEL_EXPORTER_OTLP_COMPRESSION: gzip
+          OTEL_SERVICE_NAME: !Sub '${NestedStackName}-python-client'
+          TARGET_URL: !Sub 'https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod/quotes'
+      Events:
+        ScheduleEvent:
+          Type: Schedule
+          Properties:
+            Schedule: rate(5 minutes)
+            Description: "Trigger the Lambda function every time period"
+            Enabled: true
+
+  NodeLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${NestedStackName}-node-client'
+      CodeUri: ./node
+      Handler: index.handler
+      Runtime: nodejs20.x
+      Description: 'Demo Node.js Client Lambda function to showcase OpenTelemetry integration'
+      Environment:
+        Variables:
+          OTEL_EXPORTER_OTLP_ENDPOINT: !Ref ExporterEndpoint
+          OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+          OTEL_EXPORTER_OTLP_COMPRESSION: gzip
+          OTEL_SERVICE_NAME: !Sub '${NestedStackName}-node-client'
+          TARGET_URL: !Sub 'https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod/quotes'
+      Events:
+        ScheduleEvent:
+          Type: Schedule
+          Properties:
+            Schedule: rate(5 minutes)
+            Description: "Trigger the Lambda function every time period"
+            Enabled: true
+    # Metadata:
+    #   BuildProperties:
+    #     UseNpmCi: true
+
+  Table:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${NestedStackName}-table'
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: expiry
+        Enabled: true
+
+Outputs:
+  FrontendLambdaFunctionArn:
+    Description: 'ARN of the Demo Frontend Lambda function'
+    Value: !GetAtt FrontendLambdaFunction.Arn
+  BackendLambdaFunctionArn:
+    Description: 'ARN of the Demo Backend Lambda function'
+    Value: !GetAtt BackendLambdaFunction.Arn
+  PythonLambdaFunctionArn:
+    Description: 'ARN of the Demo Python Client Lambda function'
+    Value: !GetAtt PythonLambdaFunction.Arn
+  BackendUrl:
+    Description: 'URL of the Backend API'
+    Value: !Sub 'https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod/quotes'
+  FrontendUrl:
+    Description: 'URL of the Frontend Lambda function'
+    Value: !GetAtt FrontendLambdaFunctionUrl.FunctionUrl

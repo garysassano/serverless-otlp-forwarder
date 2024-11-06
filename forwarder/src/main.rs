@@ -1,106 +1,189 @@
-use anyhow::{anyhow, Context, Result};
+//! AWS Lambda function that forwards CloudWatch logs to OpenTelemetry collectors.
+//! 
+//! This Lambda function:
+//! 1. Receives CloudWatch log events
+//! 2. Decodes and decompresses the log data
+//! 3. Matches each log record with an appropriate collector
+//! 4. Forwards the logs to their respective collectors with proper headers
+//! 
+//! The function supports:
+//! - Multiple collectors with different endpoints
+//! - Custom headers and authentication
+//! - Base64 encoded payloads
+//! - Gzip compressed data
+//! - OpenTelemetry instrumentation
+
+use anyhow::{Context, Result};
+use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use base64::{engine::general_purpose, Engine};
 use flate2::read::GzDecoder;
-use lambda_runtime::{service_fn, Error as LambdaError, LambdaEvent};
-use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue},
-    Client,
-};
+use futures::future::join_all;
+use reqwest::{header::HeaderMap, Client, ClientBuilder};
 use serde_json::Value;
-use std::env;
 use std::io::Read;
-use std::str::FromStr;
 use std::sync::Arc;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+use opentelemetry::trace::TraceContextExt;
+use opentelemetry::trace::Status as OTelStatus;
+use lambda_runtime::{
+    layers::{OpenTelemetryFaasTrigger, OpenTelemetryLayer as OtelLayer},
+    Error as LambdaError, LambdaEvent, Runtime,
+};
 
-// Constants for content types
-const CONTENT_TYPE_JSON: &str = "application/json";
+mod collectors;
+mod headers;
 
-// Constants for headers
-const CONTENT_TYPE_HEADER: &str = "content-type";
-const CONTENT_ENCODING_HEADER: &str = "content-encoding";
-const KEY_HEADERS: &str = "headers";
+use lambda_otel_utils::HttpTracerProviderBuilder;
+use otlp_stdout_client::LogRecord;
+use tracing::Instrument;
+use crate::collectors::Collectors;
 
-// Constants for JSON keys
-const KEY_OTEL: &str = "_otel";
-const KEY_ENDPOINT: &str = "endpoint";
-const KEY_PAYLOAD: &str = "payload";
-const KEY_BASE64: &str = "base64";
 
-// Constant for GZIP encoding
-const ENCODING_GZIP: &str = "gzip";
+/// Decodes a payload from a log record.
+/// 
+/// # Arguments
+/// * `log_record` - The log record containing the payload
+/// 
+/// # Returns
+/// * `Result<Vec<u8>>` - The decoded payload as bytes
+/// 
+/// # Details
+/// - If payload is a string: decodes from base64 if base64 flag is true
+/// - If payload is a JSON value: serializes to string first
+#[instrument(skip_all)]
+fn decode_payload(log_record: &LogRecord) -> Result<Vec<u8>, anyhow::Error> {
+    let payload = match &log_record.payload {
+        Value::String(s) => s.to_string(),
+        _ => serde_json::to_string(&log_record.payload)
+            .context("Failed to serialize JSON payload")?,
+    };
 
-struct EnvHeaders(HeaderMap);
-
-impl EnvHeaders {
-    fn new() -> Result<Self, anyhow::Error> {
-        let mut headers = HeaderMap::new();
-        if let Ok(env_headers) = env::var("OTEL_EXPORTER_OTLP_HEADERS") {
-            for header_pair in env_headers.split(',') {
-                let parts: Vec<&str> = header_pair.split('=').collect();
-                if parts.len() != 2 {
-                    warn!("Invalid header pair: {}", header_pair);
-                    continue;
-                }
-
-                let (name, value) = (parts[0].trim(), parts[1].trim());
-
-                if let Ok(header_name) = HeaderName::from_str(name) {
-                    if let Ok(header_value) = HeaderValue::from_str(value) {
-                        headers.insert(header_name, header_value);
-                        debug!("Added header from env: {}={}", name, value);
-                    } else {
-                        warn!("Invalid header value from env: {}", value);
-                    }
-                } else {
-                    warn!("Invalid header name from env: {}", name);
-                }
-            }
-        }
-        Ok(EnvHeaders(headers))
+    match log_record.base64 {
+        Some(true) => general_purpose::STANDARD
+            .decode(&payload)
+            .context("Failed to decode base64 payload"),
+        _ => Ok(payload.as_bytes().to_vec()),
     }
 }
 
-/// Handles the Lambda function invocation.
-///
-/// This function processes the incoming CloudWatch Logs event, decodes and decompresses
-/// the log data, and processes each log event.
-///
-/// # Arguments
-///
-/// * `event` - The Lambda event containing the CloudWatch Logs data
-/// * `client` - An HTTP client for making outbound requests
-/// * `env_headers` - Pre-processed environment headers
-///
-/// # Returns
-///``
-/// Returns `Ok(())` if processing is successful, or an error if any step fails.
-#[instrument(skip(event, client, env_headers))]
+/// Sends an HTTP POST request to the specified endpoint with the given headers and payload.
+/// Includes OpenTelemetry instrumentation for request tracking.
+#[instrument(skip_all, fields(
+    forwarder.endpoint = endpoint, 
+    lambda_otlp_forwarder.send_request.status
+))]
+async fn send_request(
+    client: &Client,
+    endpoint: &str,
+    headers: HeaderMap,
+    payload: Vec<u8>,
+) -> Result<(), anyhow::Error> {
+    let current_span = tracing::Span::current();
+    let response = client
+        .post(endpoint)
+        .headers(headers.clone())
+        .body(payload.clone())
+        .send()
+        .await
+        .context("Failed to send POST request")?;
+
+    let status = response.status();
+    current_span.record(
+        "lambda_otlp_forwarder.send_request.status",
+        status.to_string(),
+    );
+    if !status.is_success() {
+        current_span.context().span().set_status(OTelStatus::error("Failed to post log record"));
+        tracing::warn!(
+            name = "error posting log record",
+            endpoint = endpoint,
+            status = status.as_u16(),
+        );
+    }
+    Ok(())
+}
+
+/// Processes a single log record by:
+/// 1. Decoding its payload
+/// 2. Finding a matching collector
+/// 3. Building request headers
+/// 4. Sending the request to the collector
+#[instrument(skip(client, log_record, env_headers), fields(
+    source = log_record.source,
+))]
+async fn process_record(
+    client: &Client,
+    log_record: LogRecord,
+    env_headers: &headers::EnvHeaders,
+) -> Result<(), anyhow::Error> {
+    let decoded_payload = decode_payload(&log_record)?;
+
+    let collector = match Collectors::find_matching(&log_record.endpoint) {
+        Some(c) => c,
+        None => {
+            tracing::warn!(
+                "No matching collector found for endpoint: {}. Skipping this record.",
+                log_record.endpoint
+            );
+            return Ok(());
+        }
+    };
+
+    let headers = headers::LogRecordHeaders::new()
+        .with_env_headers(env_headers)
+        .with_log_record(&log_record)?
+        .with_collector_auth(&collector.auth)?
+        .build();
+
+    send_request(client, &log_record.endpoint, headers, decoded_payload).await
+}
+
+/// Processes a single CloudWatch log event by:
+/// 1. Extracting the log record from the event message
+/// 2. Parsing it into a structured format
+/// 3. Processing the resulting log record
+async fn process_log_event(
+    event: &Value,
+    client: &Client,
+    env_headers: &headers::EnvHeaders,
+) -> Result<()> {
+    let record = event["message"]
+        .as_str()
+        .context("Log event 'message' field is not a string")?;
+
+    let log_record: LogRecord = serde_json::from_str(record)
+        .with_context(|| format!("Failed to parse log record: {}", record))?;
+
+    tracing::debug!("Processing log event");
+    process_record(client, log_record, env_headers).await
+}
+
+/// Main Lambda function handler that:
+/// 1. Decodes base64 CloudWatch log data
+/// 2. Decompresses gzipped content
+/// 3. Spawns concurrent tasks to process each log event
+/// 4. Aggregates results and handles errors
+#[instrument(skip_all, name = "function_handler")]
 async fn function_handler(
     event: LambdaEvent<Value>,
     client: Client,
-    env_headers: Arc<EnvHeaders>,
+    env_headers: Arc<headers::EnvHeaders>,
 ) -> Result<(), LambdaError> {
-    debug!("Function handler started");
+    tracing::debug!("Function handler started");
 
     // Extract and process the CloudWatch Logs data
-    let awslogs = event
-        .payload
-        .get("awslogs")
-        .context("No 'awslogs' object found in the payload")?;
-    debug!("Extracted awslogs from payload");
-
-    let data = awslogs
-        .get("data")
-        .and_then(|d| d.as_str())
-        .context("No 'data' field found in awslogs or it's not a string")?;
-    debug!("Extracted data from awslogs");
-
-    // Decode the base64 encoded log data
     let decoded = general_purpose::STANDARD
-        .decode(data)
+        .decode(
+            event
+                .payload
+                .get("awslogs")
+                .context("No 'awslogs' object found in the payload")?
+                .get("data")
+                .and_then(|d| d.as_str())
+                .context("No 'data' field found in awslogs or it's not a string")?,
+        )
         .context("Failed to decode base64")?;
-    debug!("Decoded base64 data");
 
     // Decompress the gzipped log data
     let mut decoder = GzDecoder::new(&decoded[..]);
@@ -108,256 +191,80 @@ async fn function_handler(
     decoder
         .read_to_string(&mut decompressed)
         .context("Failed to decompress data")?;
-    debug!("Decompressed gzip data");
 
     // Parse the JSON log data
     let log_data: Value =
         serde_json::from_str(&decompressed).context("Failed to parse decompressed data as JSON")?;
-    debug!("Parsed decompressed data as JSON");
 
     // Process each log event
     let log_events = log_data["logEvents"]
         .as_array()
         .context("No logEvents array found in the data")?;
-    info!("Processing {} log events", log_events.len());
+    tracing::debug!("Processing {} log events", log_events.len());
 
-    for (index, event) in log_events.iter().enumerate() {
-        debug!("Processing log event {}/{}", index + 1, log_events.len());
-        if let Some(message) = event["message"].as_str() {
-            match serde_json::from_str::<Value>(message) {
-                Ok(message_json) => {
-                    debug!("Successfully parsed message as JSON");
-                    process_message(&client, message_json, &env_headers).await?;
+    // Create an Arc<Vec<Value>> to share ownership of log_events
+    let log_events = Arc::new(log_events.clone());
+
+    let tasks: Vec<_> = log_events
+        .iter()
+        .map(|event| {
+            let client = client.clone();
+            let env_headers = Arc::clone(&env_headers);
+            let event = event.clone();
+
+            async move {
+                let result = process_log_event(&event, &client, &env_headers).await;
+                if let Err(e) = &result {
+                    tracing::warn!("Error processing log event: {}", e);
                 }
-                Err(e) => warn!("Failed to parse message as JSON: {}", e),
+                result
             }
-        } else {
-            warn!("Log event does not contain a 'message' field or it's not a string");
+            .instrument(tracing::info_span!("process_log_event"))
+        })
+        .map(|future| tokio::spawn(future.in_current_span()))
+        .collect();
+
+    let results = join_all(tasks).await;
+    for result in results {
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::error!("Task error: {:?}", e),
+            Err(e) => tracing::error!("Task panicked: {:?}", e),
         }
     }
-
-    info!("Function handler completed successfully");
     Ok(())
-}
-
-/// Processes a single log message.
-///
-/// This function extracts the payload from the message, decodes it if necessary,
-/// prepares headers, and sends the data to the specified endpoint.
-///
-/// # Arguments
-///
-/// * `client` - An HTTP client for making outbound requests
-/// * `message` - The JSON message to process
-/// * `env_headers` - Pre-processed environment headers
-///
-/// # Returns
-///
-/// Returns `Ok(())` if processing is successful, or an error if any step fails.
-#[instrument(skip(client, message, env_headers))]
-async fn process_message(
-    client: &Client,
-    message: Value,
-    env_headers: &EnvHeaders,
-) -> Result<(), anyhow::Error> {
-    info!("Starting to process message");
-
-    // Check if the message contains the OpenTelemetry field
-    if message.get(KEY_OTEL).is_none() {
-        info!("Skipping record without _otel field");
-        return Ok(());
-    }
-
-    info!("Message has _otel field, continuing processing");
-    debug!("Full message structure: {:?}", message);
-
-    // Extract and process the payload
-    let payload = extract_payload(&message)?;
-    info!("Extracted payload from message");
-
-    // Decode the payload if it's base64 encoded
-    let decoded_payload = decode_payload(&message, payload)?;
-    debug!("Decoded payload (length: {} bytes)", decoded_payload.len());
-
-    // Process the payload based on content type and encoding
-    let final_payload = process_payload(&message, decoded_payload)?;
-    debug!("Processed payload (length: {} bytes)", final_payload.len());
-
-    // Prepare headers for the outbound request
-    let mut headers = HeaderMap::new();
-    extract_headers(&message, &mut headers)?;
-    add_content_headers(&message, &mut headers)?;
-    headers.extend(env_headers.0.clone()); // Add environment headers
-
-    // Extract the endpoint and send the request
-    let endpoint = message
-        .get(KEY_ENDPOINT)
-        .and_then(|e| e.as_str())
-        .context("Endpoint is missing or not a string")?;
-    debug!("Sending POST request to endpoint: {}", endpoint);
-
-    send_request(client, endpoint, headers, final_payload).await
-}
-
-/// Extracts the payload from the message.
-fn extract_payload(message: &Value) -> Result<String, anyhow::Error> {
-    match message.get(KEY_PAYLOAD) {
-        Some(p) => match p {
-            Value::String(s) => Ok(s.clone()),
-            Value::Object(o) => {
-                serde_json::to_string(o).context("Failed to serialize payload object to string")
-            }
-            _ => Err(anyhow::anyhow!("Payload is neither a string nor an object")),
-        },
-        None => Err(anyhow::anyhow!("Payload field is missing from the message")),
-    }
-}
-
-/// Decodes the payload if it's base64 encoded.
-fn decode_payload(message: &Value, payload: String) -> Result<Vec<u8>, anyhow::Error> {
-    if message.get(KEY_BASE64).and_then(|v| v.as_bool()) == Some(true) {
-        general_purpose::STANDARD
-            .decode(&payload)
-            .context("Failed to decode base64 payload")
-    } else {
-        Ok(payload.into_bytes())
-    }
-}
-
-/// Processes the payload based on content type and encoding.
-fn process_payload(message: &Value, decoded_payload: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
-    if message.get(CONTENT_ENCODING_HEADER) == Some(&Value::String(ENCODING_GZIP.to_string())) {
-        debug!("Payload is gzip-encoded, keeping as bytes");
-        Ok(decoded_payload)
-    } else if message.get(CONTENT_TYPE_HEADER)
-        == Some(&Value::String(CONTENT_TYPE_JSON.to_string()))
-    {
-        let json_str = String::from_utf8(decoded_payload)
-            .context("Failed to convert payload to UTF-8 string")?;
-        let json_value: Value =
-            serde_json::from_str(&json_str).context("Failed to parse payload as JSON")?;
-        serde_json::to_vec(&json_value).context("Failed to convert JSON to bytes")
-    } else {
-        Ok(decoded_payload)
-    }
-}
-
-/// Extracts headers from the message and adds them to the HeaderMap.
-fn extract_headers(message: &Value, headers: &mut HeaderMap) -> Result<(), anyhow::Error> {
-    let message_headers = match message.get(KEY_HEADERS).and_then(|h| h.as_object()) {
-        Some(headers) => headers,
-        None => return Ok(()), // No headers to process
-    };
-
-    for (key, value) in message_headers {
-        let value_str = match value.as_str() {
-            Some(s) => s,
-            None => {
-                warn!("Header value is not a string for key: {}", key);
-                continue;
-            }
-        };
-
-        let normalized_key = key.to_lowercase();
-        let header_name = match HeaderName::from_str(&normalized_key) {
-            Ok(name) => name,
-            Err(_) => {
-                warn!("Invalid header name: {}", normalized_key);
-                continue;
-            }
-        };
-
-        let header_value = match HeaderValue::from_str(value_str) {
-            Ok(value) => value,
-            Err(_) => {
-                warn!("Invalid header value for {}: {}", normalized_key, value_str);
-                continue;
-            }
-        };
-
-        headers.insert(header_name, header_value);
-        debug!(
-            "Added header from message: {}={}",
-            normalized_key, value_str
-        );
-    }
-
-    Ok(())
-}
-
-/// Adds content-type and content-encoding headers if present in the message.
-fn add_content_headers(message: &Value, headers: &mut HeaderMap) -> Result<(), anyhow::Error> {
-    if let Some(content_type) = message.get(CONTENT_TYPE_HEADER).and_then(|ct| ct.as_str()) {
-        headers.insert(
-            HeaderName::from_static(CONTENT_TYPE_HEADER),
-            HeaderValue::from_str(content_type)?,
-        );
-        debug!("Added/Updated content-type header: {}", content_type);
-    }
-    if let Some(content_encoding) = message
-        .get(CONTENT_ENCODING_HEADER)
-        .and_then(|ce| ce.as_str())
-    {
-        headers.insert(
-            HeaderName::from_static(CONTENT_ENCODING_HEADER),
-            HeaderValue::from_str(content_encoding)?,
-        );
-        debug!(
-            "Added/Updated content-encoding header: {}",
-            content_encoding
-        );
-    }
-    Ok(())
-}
-
-/// Sends the HTTP request with the processed payload and headers.
-async fn send_request(
-    client: &Client,
-    endpoint: &str,
-    headers: HeaderMap,
-    payload: Vec<u8>,
-) -> Result<(), anyhow::Error> {
-    let response = client
-        .post(endpoint)
-        .headers(headers)
-        .body(payload)
-        .send()
-        .await
-        .context("Failed to send POST request")?;
-
-    if response.status().is_success() {
-        info!(
-            "Successfully posted message. Endpoint: {}, Status: {}, Headers: {:?}",
-            endpoint,
-            response.status(),
-            response.headers()
-        );
-        Ok(())
-    } else {
-        let error_message = format!(
-            "Failed to post message. Status: {}, Body: {:?}",
-            response.status(),
-            response.text().await
-        );
-        error!("{}", error_message);
-        Err(anyhow!(error_message))
-    }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), LambdaError> {
-    // Initialize the logger with a specific log level
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_target(false)
-        .init();
+    let tracer_provider = HttpTracerProviderBuilder::default()
+        .enable_global(true)
+        .enable_fmt_layer(true)
+        .with_tracer_name("lambda-otlp-forwarder")
+        .with_batch_exporter()
+        .build()?;
 
-    info!("Lambda function started");
-    let client = Client::new();
-    let env_headers = Arc::new(EnvHeaders::new()?);
-    lambda_runtime::run(service_fn(|event| {
-        function_handler(event, client.clone(), env_headers.clone())
+    // Initialize AWS clients and collectors
+    let config = aws_config::load_from_env().await;
+    let secrets_client = SecretsManagerClient::new(&config);
+    Collectors::init(&secrets_client).await?;
+
+    let http_client = ClientBuilder::new().build()?;
+    let env_headers = headers::EnvHeaders::from_env()?;
+
+    Runtime::new(lambda_runtime::service_fn(|event| {
+        let client = http_client.clone();
+        let env_headers = Arc::clone(&env_headers);
+        async move {
+            function_handler(event, client, env_headers).await
+        }
     }))
+    .layer(
+        OtelLayer::new(|| {
+            tracer_provider.force_flush();
+        })
+        .with_trigger(OpenTelemetryFaasTrigger::PubSub),
+    )
+    .run()
     .await
 }

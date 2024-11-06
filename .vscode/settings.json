@@ -1,6 +1,15 @@
 {
     "rust-analyzer.linkedProjects": [
-        "otlp-stdout-client/rust/client/Cargo.toml"
+        "packages/rust/otlp-stdout-client/Cargo.toml",
+        "packages/rust/lambda-otel-utils/Cargo.toml",
+        "forwarder/Cargo.toml",
+        "demo/rust/Cargo.toml",
+        "demo/rust/router/Cargo.toml",
+        "demo/rust/router/router-core/Cargo.toml",
+        "demo/rust/router/router-macro/Cargo.toml"
     ],
-    "rust-analyzer.cargo.features": "all"
+    "rust-analyzer.cargo.features": "all",
+    "python.analysis.extraPaths": [
+        "./otlp-stdout-client/python/src"
+    ]
 }
