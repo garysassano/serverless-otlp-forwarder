@@ -1,0 +1,19 @@
+{
+  "name": "@dev7a/otlp-stdout-exporter-examples",
+  "private": true,
+  "scripts": {
+    "start": "ts-node basic.ts"
+  },
+  "dependencies": {
+    "@dev7a/otlp-stdout-exporter": "file:../",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/sdk-trace-node": "^1.27.0",
+    "@opentelemetry/sdk-trace-base": "^1.27.0",
+    "@opentelemetry/resources": "^1.27.0",
+    "@opentelemetry/semantic-conventions": "^1.27.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "ts-node": "^10.9.2"
+  }
+} 
