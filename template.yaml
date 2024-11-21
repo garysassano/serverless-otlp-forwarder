@@ -11,9 +11,13 @@ Parameters:
     Type: String
     Default: 'true'
     Description: 'Deploy the demo application'
+  CollectorsSecretsKeyPrefix:
+    Type: String
+    Default: 'lambda-otlp-forwarder/keys'
   DemoExporterEndpoint:
     Type: String
     Description: 'The endpoint of the OTLP exporter for the demo application'
+    Default: 'https://localhost:4318'
 
 Conditions:
   RouteAllLogs: !Equals [!Ref RouteAllLogs, 'true']
@@ -43,23 +47,23 @@ Resources:
       Environment:
         Variables:
           RUST_LOG: info
-          COLLECTORS_SECRET_ARN: !Ref CollectorsSecret
-          OTEL_EXPORTER_OTLP_ENDPOINT: https://api.honeycomb.io
+          OTEL_EXPORTER_OTLP_ENDPOINT: !Sub '{{resolve:secretsmanager:${CollectorsSecretsKeyPrefix}/default:SecretString:endpoint}}'
+          OTEL_EXPORTER_OTLP_HEADERS: !Sub '{{resolve:secretsmanager:${CollectorsSecretsKeyPrefix}/default:SecretString:auth}}'
           OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
-          OTEL_EXPORTER_OTLP_HEADERS: !Sub '{{resolve:secretsmanager:keys/collector}}'
+          COLLECTORS_CACHE_TTL_SECONDS: '300'
+          COLLECTORS_SECRETS_KEY_PREFIX: !Sub '${CollectorsSecretsKeyPrefix}/'
       Policies:
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
               Action:
+                - 'secretsmanager:BatchGetSecretValue'
+                - 'secretsmanager:ListSecrets'
+              Resource: '*'
+            - Effect: Allow
+              Action:
                 - 'secretsmanager:GetSecretValue'
-              Resource: !Ref CollectorsSecret
-
-  CollectorsSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub '${AWS::StackName}-collectors'
-      Description: 'Configuration for OTLP collectors'
+              Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${CollectorsSecretsKeyPrefix}/*'
 
   LogProcessorFunctionPermission:
     Type: AWS::Lambda::Permission
@@ -100,9 +104,6 @@ Outputs:
   LogProcessorFunctionArn:
     Description: 'ARN of the Log Processor Lambda function'
     Value: !GetAtt LogProcessorFunction.Arn
-  CollectorsSecretArn:
-    Description: 'ARN of the Collectors Secret'
-    Value: !Ref CollectorsSecret
   BackendUrl:
     Condition: DeployDemo
     Description: 'URL of the Backend API'

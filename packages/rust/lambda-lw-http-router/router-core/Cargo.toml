@@ -1,0 +1,19 @@
+[package]
+name = "lambda-lw-http-router-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+once_cell = "1.17.2"
+regex = "1.10"
+serde_json = "1.0"
+lambda_runtime = "0.13.0"
+aws_lambda_events = { version = "0.15.1", features = ["alb", "apigw"] }
+lazy_static = "1.4.0"
+ctor = "0.2.5"
+tracing = { version = "0.1" }
+opentelemetry = { version = "0.26.0", features = ["trace"] }
+tracing-opentelemetry = "0.27.0"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["rt", "macros", "test-util"] } 

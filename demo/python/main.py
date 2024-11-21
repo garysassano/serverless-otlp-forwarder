@@ -12,8 +12,6 @@ from opentelemetry.trace import SpanKind
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.semconv.trace import SpanAttributes
 
-
-
 def init_telemetry(
     service_name: str = __name__,
     lambda_context=None,

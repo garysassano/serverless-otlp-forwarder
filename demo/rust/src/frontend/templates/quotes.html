@@ -231,10 +231,9 @@
         <div class="header">
             <h1>Inspiring Quotes</h1>
             <div class="navigation">
-                <a href="/?time=6h" class="nav-button {% if time == '6h' %}current{% endif %}">Last 6 Hours</a>
-                <a href="/?time=6_12h" class="nav-button {% if time == '6_12h' %}current{% endif %}">6-12 Hours Ago</a>
-                <a href="/?time=12_24h" class="nav-button {% if time == '12_24h' %}current{% endif %}">12-24 Hours Ago</a>
-                <a href="/?time=24_48h" class="nav-button {% if time == '24_48h' %}current{% endif %}">Yesterday</a>
+                <a href="/now" class="nav-button {% if timeframe == 'now' %}current{% endif %}">Last 6 Hours</a>
+                <a href="/earlier" class="nav-button {% if timeframe == 'earlier' %}current{% endif %}">Earlier Today</a>
+                <a href="/yesterday" class="nav-button {% if timeframe == 'yesterday' %}current{% endif %}">Yesterday</a>
             </div>
         </div>
         {% endif %}

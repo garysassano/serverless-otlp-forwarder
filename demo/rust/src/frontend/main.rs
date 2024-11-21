@@ -1,17 +1,14 @@
 use anyhow::{Context, Result};
 use aws_lambda_events::apigw::ApiGatewayV2httpRequest;
-use lambda_lw_router::{define_router, route};
+use chrono::{DateTime, Duration, Utc};
+use lambda_lw_http_router::{define_router, route};
 use lambda_otel_utils::{HttpOtelLayer, HttpTracerProviderBuilder};
-use lambda_runtime::{
-    layers::{OpenTelemetryFaasTrigger, OpenTelemetryLayer},
-    service_fn,
-    tower::Layer,
-    Error, LambdaEvent, Runtime,
-};
-use opentelemetry::global;
+use lambda_runtime::{service_fn, tower::ServiceBuilder, Error, LambdaEvent, Runtime};
 use opentelemetry::trace::{Status, TraceContextExt};
+use opentelemetry::global;
 use opentelemetry_http::HeaderInjector;
 use opentelemetry_semantic_conventions as semconv;
+use reqwest::Url;
 use reqwest::{header::HeaderMap, Client};
 use serde_json::{json, Value};
 use std::env;
@@ -19,13 +16,8 @@ use std::sync::Arc;
 use tera::{Context as TeraContext, Tera};
 use tracing::instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-use chrono::{DateTime, Utc, Duration};
-use tracing::debug;
-
 // Embed the quotes.html template at compile time
 const QUOTES_TEMPLATE: &str = include_str!("templates/quotes.html");
-
-define_router!(event = ApiGatewayV2httpRequest);
 
 #[derive(Clone)]
 struct AppState {
@@ -34,14 +26,49 @@ struct AppState {
     target_url: String,
     templates: Tera,
 }
+define_router!(event = ApiGatewayV2httpRequest, state = AppState);
 
-#[instrument(skip_all, fields(otel.kind = "client", http.request.method = "GET", url.full, http.response.status_code))]
+fn format_relative_time(timestamp: &str) -> String {
+    let timestamp = DateTime::parse_from_rfc3339(timestamp)
+        .unwrap_or_else(|_| DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z").unwrap());
+    let now = Utc::now();
+    let duration = now.signed_duration_since(timestamp.with_timezone(&Utc));
+
+    if duration.num_minutes() < 60 {
+        format!("{} minutes ago", duration.num_minutes())
+    } else if duration.num_hours() < 24 {
+        format!("{} hours ago", duration.num_hours())
+    } else {
+        format!("{} days ago", duration.num_days())
+    }
+}
+
+#[instrument(
+    skip_all,
+    fields(
+        otel.kind = "client",
+        http.request.method = "GET",
+        url.full,
+        http.response.status_code,
+        network.protocol.name = "http",
+        network.protocol.version = "1.1",
+        url.scheme = "https"
+    )
+)]
 async fn get_all_quotes(client: &Client, target_url: &str) -> Result<Value> {
     let target_url = format!("{}/quotes", target_url);
 
     let current_span = tracing::Span::current();
     let cx = current_span.context();
     current_span.record("url.full", target_url.as_str());
+
+    // Parse URL for server attributes
+    if let Ok(url) = Url::parse(&target_url) {
+        current_span.record("server.address", url.host_str().unwrap_or(""));
+        if let Some(port) = url.port_or_known_default() {
+            current_span.record("server.port", port);
+        }
+    }
 
     // Inject tracing context into request headers
     let mut headers = HeaderMap::new();
@@ -94,13 +121,32 @@ async fn get_all_quotes(client: &Client, target_url: &str) -> Result<Value> {
     Ok(response_body)
 }
 
-#[instrument(skip_all, fields(otel.kind = "client", http.request.method = "GET", url.full, http.response.status_code))]
+#[instrument(
+    skip_all,
+    fields(
+        otel.kind = "client",
+        http.request.method = "GET",
+        url.full,
+        http.response.status_code,
+        network.protocol.name = "http",
+        network.protocol.version = "1.1",
+        url.scheme = "https"
+    )
+)]
 async fn get_quote(client: &Client, target_url: &str, id: &str) -> Result<Value> {
     let target_url = format!("{}/quotes/{}", target_url, id);
 
     let current_span = tracing::Span::current();
     let cx = current_span.context();
     current_span.record("url.full", target_url.as_str());
+
+    // Parse URL for server attributes
+    if let Ok(url) = Url::parse(&target_url) {
+        current_span.record("server.address", url.host_str().unwrap_or(""));
+        if let Some(port) = url.port_or_known_default() {
+            current_span.record("server.port", port);
+        }
+    }
 
     let mut headers = HeaderMap::new();
     global::get_text_map_propagator(|propagator| {
@@ -126,6 +172,7 @@ async fn get_quote(client: &Client, target_url: &str, id: &str) -> Result<Value>
             .text()
             .await
             .context("Failed to read error response body")?;
+        current_span.record("error.type", "HTTP");
         return Err(anyhow::anyhow!("HTTP error {}: {}", status, error_body));
     }
 
@@ -137,41 +184,53 @@ async fn get_quote(client: &Client, target_url: &str, id: &str) -> Result<Value>
     Ok(response_body)
 }
 
-fn format_relative_time(timestamp: &str) -> String {
-    let timestamp = DateTime::parse_from_rfc3339(timestamp)
-        .unwrap_or_else(|_| DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z").unwrap());
-    let now = Utc::now();
-    let duration = now.signed_duration_since(timestamp.with_timezone(&Utc));
-
-    if duration.num_minutes() < 60 {
-        format!("{} minutes ago", duration.num_minutes())
-    } else if duration.num_hours() < 24 {
-        format!("{} hours ago", duration.num_hours())
-    } else {
-        format!("{} days ago", duration.num_days())
-    }
+#[route(method = "GET", path = "/")]
+async fn handle_root_redirect(_rctx: RouteContext) -> Result<Value, Error> {
+    // Return a 301 permanent redirect to /now
+    Ok(json!({
+        "statusCode": 301,
+        "headers": {
+            "Location": "/now",
+            "Content-Type": "text/html"
+        },
+        "body": "<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"0;url=/now\"></head><body>Redirecting to <a href=\"/now\">/now</a>...</body></html>"
+    }))
 }
 
-#[route(method = "GET", path = "/")]
-async fn handle_root(ctx: router::RouteContext) -> Result<Value, Error> {
-    let time_filter = ctx.event.query_string_parameters
-        .first("time")
-        .unwrap_or("6h"); // Default to showing quotes up to 6 hours old
-    
-    // Define the time ranges
-    let (start_duration, end_duration) = match time_filter {
-        "6h" => (Duration::zero(), Duration::hours(6)),         // 0-6 hours old
-        "6_12h" => (Duration::hours(6), Duration::hours(12)),   // 6-12 hours old
-        "12_24h" => (Duration::hours(12), Duration::hours(24)), // 12-24 hours old
-        "24_48h" => (Duration::hours(24), Duration::hours(48)), // 1-2 days old
-        _ => (Duration::zero(), Duration::hours(6)),            // default to 0-6 hours
+#[route(method = "GET", path = "/{timeframe}")]
+async fn hande_home(rctx: RouteContext) -> Result<Value, Error> {
+    let timeframe = match rctx.params.get("timeframe") {
+        Some(frame) if !frame.is_empty() => {
+            rctx.set_otel_attribute("resource.query.time.frame", frame.to_owned());
+            frame
+        }
+        _ => {
+            return Ok(json!({
+                "statusCode": 404,
+                "headers": {"Content-Type": "text/plain"},
+                "body": "Invalid time frame"
+            }));
+        }
     };
 
-    let response = get_all_quotes(&ctx.state.http_client, &ctx.state.target_url).await?;
-    let mut tera_ctx = ctx.state.base_context.clone();
+    // Define the time ranges
+    let (start_duration, end_duration) = match timeframe.as_str() {
+        "now" => (Duration::zero(), Duration::hours(6)),         // 0-6 hours old
+        "earlier" => (Duration::hours(6), Duration::hours(24)),  // 6-24 hours old
+        "yesterday" => (Duration::hours(24), Duration::hours(48)), // 24-48 hours old
+        _ => return Ok(json!({
+            "statusCode": 404,
+            "headers": {"Content-Type": "text/plain"},
+            "body": "Invalid time frame"
+        })),
+    };
+
+    let response = get_all_quotes(&rctx.state.http_client, &rctx.state.target_url).await?;
+    let mut tera_ctx = rctx.state.base_context.clone();
 
     if let Value::Array(quotes_array) = response {
-        let mut processed_quotes: Vec<Value> = quotes_array.into_iter()
+        let mut processed_quotes: Vec<Value> = quotes_array
+            .into_iter()
             .filter(|quote| {
                 if let Some(timestamp) = quote.get("timestamp").and_then(|t| t.as_str()) {
                     if let Ok(quote_time) = DateTime::parse_from_rfc3339(timestamp) {
@@ -184,10 +243,10 @@ async fn handle_root(ctx: router::RouteContext) -> Result<Value, Error> {
             .map(|mut quote| {
                 if let Some(timestamp) = quote.get("timestamp").and_then(|t| t.as_str()) {
                     let relative_time = format_relative_time(timestamp);
-                    quote.as_object_mut().unwrap().insert(
-                        "relative_time".to_string(),
-                        Value::String(relative_time),
-                    );
+                    quote
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("relative_time".to_string(), Value::String(relative_time));
                 }
                 quote
             })
@@ -195,13 +254,15 @@ async fn handle_root(ctx: router::RouteContext) -> Result<Value, Error> {
 
         // Sort quotes by timestamp in descending order (newest first)
         processed_quotes.sort_by(|a, b| {
-            let a_time = a.get("timestamp")
+            let a_time = a
+                .get("timestamp")
                 .and_then(|t| t.as_str())
                 .and_then(|t| DateTime::parse_from_rfc3339(t).ok());
-            let b_time = b.get("timestamp")
+            let b_time = b
+                .get("timestamp")
                 .and_then(|t| t.as_str())
                 .and_then(|t| DateTime::parse_from_rfc3339(t).ok());
-            
+
             match (a_time, b_time) {
                 (Some(a), Some(b)) => b.cmp(&a),
                 (Some(_), None) => std::cmp::Ordering::Less,
@@ -213,9 +274,9 @@ async fn handle_root(ctx: router::RouteContext) -> Result<Value, Error> {
         tera_ctx.insert("quotes", &processed_quotes);
     }
 
-    tera_ctx.insert("time", time_filter);
+    tera_ctx.insert("timeframe", timeframe);
 
-    let html_content = ctx.state.templates.render("quotes.html", &tera_ctx)?;
+    let html_content = rctx.state.templates.render("quotes.html", &tera_ctx)?;
 
     Ok(json!({
         "statusCode": 200,
@@ -225,62 +286,50 @@ async fn handle_root(ctx: router::RouteContext) -> Result<Value, Error> {
 }
 
 #[route(method = "GET", path = "/quote/{id}")]
-async fn handle_quote(ctx: router::RouteContext) -> Result<Value, Error> {
-    let quote_id = ctx.params.get("id")
-        .ok_or_else(|| Error::from("Quote ID not provided"))?;
-    
-    let response = get_quote(&ctx.state.http_client, &ctx.state.target_url, quote_id).await?;
-    let mut tera_ctx = ctx.state.base_context.clone();
-    
+async fn handle_quote(rctx: RouteContext) -> Result<Value, Error> {
+    let quote_id = match rctx.params.get("id") {
+        Some(id) if !id.is_empty() => {
+            rctx.set_otel_attribute("resource.type", "quote")
+                .set_otel_attribute("resource.path.quote_id", id.to_owned());
+            id
+        }
+        _ => {
+            return Ok(json!({
+                "statusCode": 404,
+                "headers": {"Content-Type": "text/plain"},
+                "body": "Quote not found"
+            }));
+        }
+    };
+
+    let response = get_quote(&rctx.state.http_client, &rctx.state.target_url, &quote_id).await?;
+    let mut tera_ctx = rctx.state.base_context.clone();
+
     // Process the single quote to add relative_time
     let mut quote = response;
     if let Some(timestamp) = quote.get("timestamp").and_then(|t| t.as_str()) {
         let relative_time = format_relative_time(timestamp);
-        quote.as_object_mut()
+        quote
+            .as_object_mut()
             .ok_or_else(|| Error::from("Invalid quote format"))?
             .insert("relative_time".to_string(), Value::String(relative_time));
     }
-    
+
     // Wrap in array for template compatibility
     tera_ctx.insert("quotes", &vec![quote]);
     tera_ctx.insert("single_quote", &true);
-    tera_ctx.insert("time", "current");  // Add time context even for single quote
+    tera_ctx.insert("time", "current"); // Add time context even for single quote
 
-    let html_content = ctx.state.templates.render("quotes.html", &tera_ctx)
+    let html_content = rctx
+        .state
+        .templates
+        .render("quotes.html", &tera_ctx)
         .map_err(|e| Error::from(format!("Failed to render template: {}", e)))?;
 
     Ok(json!({
         "statusCode": 200,
         "headers": {"Content-Type": "text/html"},
         "body": html_content
-    }))
-}
-
-#[route(method = "GET", path = "/hello")]
-async fn handle_hello(ctx: router::RouteContext) -> Result<Value, Error> {
-    Ok(json!({
-        "statusCode": 200,  
-        "headers": {
-            "Content-Type": "application/json",
-        },
-        "body": ctx.event
-    }))
-}
-
-#[route(method = "GET", path = "/files/{folder}/{proxy+}")]
-async fn handle_files(ctx: router::RouteContext) -> Result<Value, Error> {
-    Ok(json!({
-        "statusCode": 200,
-        "headers": {
-            "Content-Type": "application/json",
-            "X-Custom-Header": "my-header-value"
-        },
-        "body": json!({
-            "folder": ctx.params.get("folder"),
-            "path": ctx.params.get("proxy"),
-            "raw_path": ctx.path,
-            "all_params": ctx.params,
-        }).to_string()
     }))
 }
 
@@ -322,27 +371,17 @@ async fn main() -> Result<(), Error> {
         .with_batch_exporter()
         .build()?;
 
-    // Create service with router and state - no need for preliminary clones
-    let service = HttpOtelLayer::new(|| {
-        // tracer_provider.force_flush();
-        for result in tracer_provider.force_flush() {
-            if let Err(err) = result {
-                println!("Error flushing: {:?}", err);
-            } else {
-                println!("Flushed");
-            }
-        }
-    })
-    .layer(service_fn(
-        move |event: LambdaEvent<ApiGatewayV2httpRequest>| {
-            let state = Arc::clone(&state);
-            let router = Arc::clone(&router);
-            async move {
-                let (event, context) = event.into_parts();
-                router.handle_request(event, context, state).await
-            }
-        },
-    ));
+    let service = ServiceBuilder::new()
+        .layer(HttpOtelLayer::new(|| {
+            tracer_provider.force_flush();
+        }))
+        .service(service_fn(
+            move |event: LambdaEvent<ApiGatewayV2httpRequest>| {
+                let state = Arc::clone(&state);
+                let router = Arc::clone(&router);
+                async move { router.handle_request(event, state).await }
+            },
+        ));
 
     Runtime::new(service).run().await
 }

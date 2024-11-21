@@ -1,9 +1,9 @@
 //! Header management for the Lambda OTLP forwarder.
-//! 
+//!
 //! This module handles two types of headers:
 //! - Environment-based headers from OTEL configuration
 //! - Log record specific headers for forwarding requests
-//! 
+//!
 //! The headers are used when forwarding log records to their respective collectors.
 
 use anyhow::{Context, Result};
@@ -11,8 +11,8 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::collections::HashMap;
 use std::env;
 use std::str::FromStr;
-use tracing::instrument;
 use std::sync::Arc;
+use tracing::instrument;
 
 use otlp_stdout_client::{LogRecord, CONTENT_ENCODING_HEADER, CONTENT_TYPE_HEADER};
 
@@ -105,14 +105,14 @@ pub(crate) struct EnvHeaders(HeaderMap);
 
 impl EnvHeaders {
     /// Creates a new EnvHeaders instance by reading from OTEL_EXPORTER_OTLP_HEADERS.
-    /// 
+    ///
     /// The environment variable should contain comma-separated key=value pairs, e.g.:
     /// "header1=value1,header2=value2"
-    /// 
+    ///
     /// Returns an Arc-wrapped instance for thread-safe sharing across async tasks.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// Returns an error if the headers are malformed or cannot be parsed.
     #[instrument]
     pub(crate) fn from_env() -> Result<Arc<Self>, anyhow::Error> {

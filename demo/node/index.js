@@ -1,11 +1,9 @@
 const { NodeTracerProvider } = require('@opentelemetry/sdk-trace-node');
 const { BatchSpanProcessor } = require('@opentelemetry/sdk-trace-base');
 const { Resource } = require('@opentelemetry/resources');
-const { ATTR_SERVICE_NAME } = require('@opentelemetry/semantic-conventions');
-const { trace, SpanKind, context, propagation } = require('@opentelemetry/api');
+const { trace, SpanKind, SpanStatusCode, context, propagation } = require('@opentelemetry/api');
 const { StdoutOTLPExporterNode } = require('@dev7a/otlp-stdout-exporter');
 const { AwsLambdaDetectorSync } = require('@opentelemetry/resource-detector-aws');
-const axios = require('axios');
 const { W3CTraceContextPropagator } = require('@opentelemetry/core');
 
 // Configure axios with OpenTelemetry
@@ -17,6 +15,9 @@ registerInstrumentations({
     new HttpInstrumentation(),
   ],
 });
+
+// finally import axios
+const axios = require('axios');
 
 const QUOTES_URL = 'https://dummyjson.com/quotes/random';
 const TARGET_URL = process.env.TARGET_URL;
@@ -30,7 +31,7 @@ const createProvider = () => {
   
   // Merge AWS resource with service name
   const resource = new Resource({
-    [ATTR_SERVICE_NAME]: process.env.AWS_LAMBDA_FUNCTION_NAME || 'demo-function',
+    ["service.name"]: process.env.AWS_LAMBDA_FUNCTION_NAME || 'demo-function',
   }).merge(awsResource);
 
   const provider = new NodeTracerProvider({
@@ -64,10 +65,10 @@ async function getRandomQuote() {
     try {
       const response = await axios.get(QUOTES_URL);
       return response.data;
-    } catch (error) {
-      span.recordException(error);
-      span.setStatus({ code: 1 });
-      throw error;
+    } catch (e) {
+      span.recordException(e);
+      span.setStatus(SpanStatusCode.ERROR);
+      throw e;
     } finally {
       span.end();
     }
@@ -104,8 +105,8 @@ async function saveQuote(quote) {
 }
 
 exports.handler = async (event, lambdaContext) => {
-  const parentSpan = tracer.startSpan('lambda-otlp-forwarder-demo-nodejs-client', {
-    kind: SpanKind.SERVER
+  const parentSpan = tracer.startSpan('lambda-invocation', {
+    kind: SpanKind.CLIENT
   });
 
   // Set the root span as active

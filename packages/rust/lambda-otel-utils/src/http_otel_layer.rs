@@ -65,9 +65,8 @@ use http::{HeaderMap, Method};
 use lambda_runtime::tower::{Layer, Service};
 use lambda_runtime::{Error, LambdaEvent};
 use opentelemetry::trace::TraceContextExt;
-use opentelemetry::{global, trace::Status};
+use opentelemetry::{global, trace::{Status, SpanKind}};
 use opentelemetry_http::HeaderExtractor;
-use opentelemetry_semantic_conventions::trace as traceconv;
 use std::{
     future::Future,
     pin::Pin,
@@ -110,6 +109,18 @@ use tracing::{instrument::Instrumented, Instrument, Span};
 ///     fn route(&self) -> String {
 ///         self.path.clone()
 ///     }
+///     
+///     fn query_string(&self) -> String {
+///         String::new()  // No query string in this example
+///     }
+///
+///     fn full_url(&self) -> String {
+///         self.path.clone()  // No query parameters in this example
+///     }
+///
+///     fn client_address(&self) -> String {
+///         String::new()  // No client address in this example
+///     }
 /// }
 /// ```
 pub trait HttpEvent {
@@ -117,6 +128,9 @@ pub trait HttpEvent {
     fn target(&self) -> String;
     fn headers(&self) -> &HeaderMap;
     fn route(&self) -> String;
+    fn full_url(&self) -> String;
+    fn client_address(&self) -> String;
+    fn query_string(&self) -> String;
 }
 
 /// A Tower layer that adds OpenTelemetry tracing to AWS Lambda functions handling HTTP events.
@@ -268,6 +282,16 @@ where
     }
 }
 
+/// Implementation of the Service trait for HttpOtelService to handle Lambda HTTP events.
+///
+/// This implementation wraps an inner service with OpenTelemetry instrumentation, creating
+/// spans for each request and propagating context through HTTP headers.
+///
+/// # Type Parameters
+///
+/// * `S` - The inner service type that handles the Lambda event
+/// * `F` - A function type used for flushing telemetry data
+/// * `T` - The HTTP event type that implements HttpEvent
 impl<S, F, T> Service<LambdaEvent<T>> for HttpOtelService<S, F>
 where
     S: Service<LambdaEvent<T>, Response = serde_json::Value, Error = Error> + Send + 'static,
@@ -284,36 +308,13 @@ where
     }
 
     fn call(&mut self, event: LambdaEvent<T>) -> Self::Future {
-        let method = event.payload.method();
-        let uri = event.payload.target();
-        let route = event.payload.route();
-        let headers = event.payload.headers();
-
-        println!("Incoming headers: {:?}", headers);
-
         // Extract parent context from headers
         let parent_cx = global::get_text_map_propagator(|propagator| {
-            propagator.extract(&HeaderExtractor(headers))
+            propagator.extract(&HeaderExtractor(event.payload.headers()))
         });
 
-        println!(
-            "Creating span - coldstart: {}, method: {}, route: {}, parent context: {:?}", 
-            self.coldstart, 
-            method,
-            route,
-            parent_cx.span().span_context()
-        );
-
-        let span = create_span(
-            &method,
-            &uri,
-            &route,
-            headers,
-            &event.context.request_id,
-            self.coldstart,
-        );
+        let span = create_span(&event, self.coldstart);
         span.set_parent(parent_cx);
-        println!("Span created: {:?}", span.context().span().span_context());
 
         self.coldstart = false;
 
@@ -327,49 +328,92 @@ where
     }
 }
 
-/// Creates a new span for an HTTP request.
+/// Creates a new span for an HTTP request with a dynamic name.
 ///
-/// This function is used internally to create a span with appropriate attributes
-/// for an incoming HTTP request.
+/// This function constructs a span for tracing HTTP requests through AWS Lambda functions,
+/// setting standardized OpenTelemetry attributes for HTTP, FaaS, and client information.
 ///
 /// # Arguments
 ///
-/// * `method` - The HTTP method of the request
-/// * `uri` - The target URI of the request
-/// * `route` - The route or resource path of the request
-/// * `headers` - The HTTP headers of the request
-/// * `request_id` - The unique identifier for this request
+/// * `event` - The Lambda event containing the HTTP request details
 /// * `is_coldstart` - Boolean indicating if this is a cold start invocation
 ///
 /// # Returns
 ///
-/// A new `Span` with HTTP request attributes and Lambda-specific fields.
-fn create_span(
-    method: &Method,
-    uri: &str,
-    route: &str,
-    headers: &HeaderMap,
-    request_id: &str,
+/// A new `Span` with:
+/// - Static name "lambda-invocation"
+/// - Dynamic `otel.name` attribute combining HTTP method and route
+/// - Standard OpenTelemetry semantic conventions for:
+///   - HTTP request attributes (method, path, scheme, etc.)
+///   - FaaS attributes (trigger, invocation ID, coldstart)
+///   - Client information (IP address, user agent)
+///
+/// The span follows the OpenTelemetry semantic conventions for HTTP and FaaS spans:
+/// https://opentelemetry.io/docs/specs/semconv/http/http-spans/
+/// https://opentelemetry.io/docs/specs/semconv/faas/faas-spans/
+fn create_span<T: HttpEvent>(
+    event: &LambdaEvent<T>,
     is_coldstart: bool,
 ) -> Span {
-    tracing::info_span!(
+    let method = event.payload.method();
+    let uri = event.payload.target();
+    let route = event.payload.route();
+    let headers = event.payload.headers();
+    let client_addr = event.payload.client_address();
+    let full_url = event.payload.full_url();
+    let query_string = event.payload.query_string();
+    
+    let span = tracing::info_span!(
         "lambda-invocation",
-        name = format!("{} {}", method, route),
-        "otel.kind" = "server",
-        "http.method" = %method,
-        "http.route" = %route,
-        "http.target" = %uri,
-        "http.user_agent" = %headers.get("user-agent").and_then(|v| v.to_str().ok()).unwrap_or(""),
-        { traceconv::FAAS_TRIGGER } = "http",
-        { traceconv::FAAS_INVOCATION_ID } = request_id,
-        { traceconv::FAAS_COLDSTART } = is_coldstart,
-        "http.response.status_code" = tracing::field::Empty,
-    )
+        otel.name = format!("{} {}", method, route),
+        otel.kind = ?SpanKind::Server,
+        
+        // Required attributes
+        http.request.method = %method,
+        url.path = %route,
+        url.scheme = "https",
+        
+        // Recommended attributes
+        client.address = %client_addr,
+        network.protocol.name = "http",
+        network.protocol.version = "1.1",
+        
+        // Additional attributes
+        http.route = %route,
+        http.target = %uri,
+        url.query = %query_string,
+        url.full = %full_url,
+        
+        // User agent
+        user_agent.original = %headers
+            .get("user-agent")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(""),
+            
+        // Function as a Service attributes
+        faas.trigger = "http",
+        faas.invocation_id = %event.context.request_id,
+        faas.coldstart = is_coldstart,
+        
+        // Response attributes (to be set later)
+        http.response.status_code = tracing::field::Empty,
+    );
+
+    span
 }
 
-// Implement HttpEvent for ApiGatewayProxyRequest, ApiGatewayV2httpRequest, and AlbTargetGroupRequest
-
-/// Implementation of HttpEvent for API Gateway Proxy requests.
+/// Implementation of HttpEvent for API Gateway REST API proxy requests.
+/// 
+/// This implementation extracts OpenTelemetry-compatible HTTP attributes from API Gateway REST API
+/// proxy requests. It handles:
+/// 
+/// - HTTP method
+/// - Target path
+/// - Headers
+/// - Route/resource path
+/// - Query string parameters
+/// - Full URL construction
+/// - Client IP address
 impl HttpEvent for ApiGatewayProxyRequest {
     fn method(&self) -> Method {
         self.http_method.clone()
@@ -387,9 +431,42 @@ impl HttpEvent for ApiGatewayProxyRequest {
     fn route(&self) -> String {
         self.resource.clone().unwrap_or_default()
     }
+
+    fn query_string(&self) -> String {
+        if self.query_string_parameters.is_empty() {
+            String::new()
+        } else {
+            self.query_string_parameters
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("&")
+        }
+    }
+
+    fn full_url(&self) -> String {
+        let path = self.path.as_deref().unwrap_or("/");
+        self.query_string()
+            .is_empty()
+            .then(|| path.to_string())
+            .unwrap_or_else(|| format!("{}?{}", path, self.query_string()))
+    }
+
+    fn client_address(&self) -> String {
+        self.request_context.identity.source_ip.clone().unwrap_or_default()
+    }
 }
 
 /// Implementation of HttpEvent for API Gateway V2 HTTP requests.
+/// 
+/// Extracts OpenTelemetry attributes from API Gateway V2 HTTP requests including:
+/// - HTTP method
+/// - Target path from raw_path
+/// - Headers
+/// - Route key or raw path as route
+/// - Raw query string parameters
+/// - Full URL construction
+/// - Client IP address from source_ip
 impl HttpEvent for ApiGatewayV2httpRequest {
     fn method(&self) -> Method {
         self.http_method.clone()
@@ -404,14 +481,42 @@ impl HttpEvent for ApiGatewayV2httpRequest {
     }
 
     fn route(&self) -> String {
-        self.raw_path
-            .as_deref()
-            .unwrap_or("/")
-            .to_string()
+        match self.route_key.as_deref() {
+            Some("$default") => self.raw_path.as_deref().unwrap_or("/").to_string(),
+            Some(route_key) => route_key
+                .split_whitespace()
+                .nth(1)  // Skip the HTTP method part
+                .unwrap_or("/")
+                .to_string(),
+            None => "/".to_string()
+        }
+    }
+
+    fn query_string(&self) -> String {
+        self.raw_query_string.clone().unwrap_or_default()
+    }
+
+    fn full_url(&self) -> String {
+        let path = self.raw_path.as_deref().unwrap_or("/");
+        self.query_string()
+            .is_empty()
+            .then(|| path.to_string())
+            .unwrap_or_else(|| format!("{}?{}", path, self.query_string()))
+    }
+
+    fn client_address(&self) -> String {
+        self.request_context.http.source_ip.clone().unwrap_or_default()
     }
 }
 
-/// Implementation of HttpEvent for Application Load Balancer Target Group requests.
+/// Extracts OpenTelemetry attributes from Application Load Balancer Target Group requests including:
+/// - HTTP method from http_method field
+/// - Target path from path field
+/// - Headers from headers field
+/// - Route from path field
+/// - Query string parameters from query_string_parameters map
+/// - Full URL construction combining path and query parameters
+/// - Client IP address from x-forwarded-for header
 impl HttpEvent for AlbTargetGroupRequest {
     fn method(&self) -> Method {
         self.http_method.clone()
@@ -427,6 +532,37 @@ impl HttpEvent for AlbTargetGroupRequest {
 
     fn route(&self) -> String {
         self.path.as_deref().unwrap_or("/").to_string()
+    }
+
+    fn query_string(&self) -> String {
+        if self.query_string_parameters.is_empty() {
+            String::new()
+        } else {
+            self.query_string_parameters
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("&")
+        }
+    }
+
+    fn full_url(&self) -> String {
+        let path = self.path.as_deref().unwrap_or("/");
+        self.query_string()
+            .is_empty()
+            .then(|| path.to_string())
+            .unwrap_or_else(|| format!("{}?{}", path, self.query_string()))
+    }
+
+    fn client_address(&self) -> String {
+        self.headers.get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .map(|ips| ips.split(',')
+                .last()  // ALB always appends the true client IP as the last entry
+                .unwrap_or("")
+                .trim()
+                .to_string())
+            .unwrap_or_default()
     }
 }
 
@@ -469,6 +605,7 @@ mod tests {
             raw_path: Some("/v2/test".to_string()),
             headers: HeaderMap::new(),
             resource: Some("/v2/resource".to_string()),
+            route_key: Some("PUT /v2/test".to_string()),
             ..Default::default()
         };
 
@@ -476,6 +613,32 @@ mod tests {
         assert_eq!(http_event.method(), Method::PUT);
         assert_eq!(http_event.target(), "/v2/test");
         assert_eq!(http_event.route(), "/v2/test");
+    }
+
+    #[test]
+    fn test_http_event_api_gateway_v2_http_request_lambda_url() {
+        let request = ApiGatewayV2httpRequest {
+            http_method: Method::GET,
+            raw_path: Some("/lambda/test".to_string()),
+            route_key: Some("$default".to_string()),
+            ..Default::default()
+        };
+
+        let http_event: &dyn HttpEvent = &request;
+        assert_eq!(http_event.route(), "/lambda/test");
+    }
+
+    #[test]
+    fn test_http_event_api_gateway_v2_http_request_no_route_key() {
+        let request = ApiGatewayV2httpRequest {
+            http_method: Method::GET,
+            raw_path: Some("/test".to_string()),
+            route_key: None,
+            ..Default::default()
+        };
+
+        let http_event: &dyn HttpEvent = &request;
+        assert_eq!(http_event.route(), "/");
     }
 
     #[test]

@@ -151,9 +151,6 @@ Resources:
             Schedule: rate(5 minutes)
             Description: "Trigger the Lambda function every time period"
             Enabled: true
-    # Metadata:
-    #   BuildProperties:
-    #     UseNpmCi: true
 
   Table:
     Type: AWS::DynamoDB::Table

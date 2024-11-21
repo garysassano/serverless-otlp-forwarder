@@ -1,9 +1,0 @@
-[package]
-name = "lambda-lw-router"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-lambda-lw-router-core = { path = "./router-core" }
-lambda-lw-router-macro = { path = "./router-macro" }
-ctor = "0.2"

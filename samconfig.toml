@@ -10,5 +10,5 @@ s3_prefix = "lambda-otlp-forwarder"
 region = "us-east-1"
 capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
 parameter_overrides = [
-    "DemoExporterEndpoint=https://api.honeycomb.io"
+    "DemoExporterEndpoint=https://localhost:4318"
 ]
