@@ -8,7 +8,7 @@ license = "MIT"
 repository = "https://github.com/dev7a/lambda-otlp-forwarder/tree/main/packages/rust/lambda-otel-utils"
 readme = "README.md"
 keywords = ["opentelemetry", "utilities", "lambda", "aws"]
-categories = ["development-tools::debugging", "development tools::profiling", "web-programming"]
+categories = ["development-tools::debugging", "development-tools::profiling", "web-programming"]
 homepage = "https://github.com/dev7a/lambda-otlp-forwarder"
 documentation = "https://docs.rs/lambda-otel-utils"
 
