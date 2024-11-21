@@ -183,7 +183,7 @@ exports.handler = async (event, context) => {
 4. **OTLP Collector**: Your chosen observability platform
 
 ### Configuring the Forwarder
-Each application needs to be instrumented with the appropriate Opentelemetry SDK for the application platform, andmust be configured to write to stdout using the [client](packages/rust/otlp-stdout-client) in Rust, the [adapter](packages/python/adapter) in Python, or the [exporter](packages/node/exporter) in Node. 
+Each application needs to be instrumented with the appropriate Opentelemetry SDK for the application platform, and must be configured to write to stdout using the [client](packages/rust/otlp-stdout-client) in Rust, the [adapter](packages/python/adapter) in Python, or the [exporter](packages/node/exporter) in Node. 
 
 Additionally, each application must also define a collector endpoint, protocol, and optional compression in the environment variables.
 For instance, this is an example configuration for a SAM template:
@@ -237,7 +237,8 @@ The default collector configuration serves two purposes:
 1. It receives and forwards telemetry data from all instrumented services in the AWS account
 2. It handles the forwarder service's own telemetry data, ensuring the forwarder itself is properly monitored
 
-[!TIP] You can add multiple configurations secrets under the same prefix, if for whatever reason you want to forward to multiple collectors. The forwarder will load all the collectors and send the telemetry data to all of them, in parallel. For instance, you could create a `lambda-otlp-forwarder/keys/honeycomb` and a `lambda-otlp-forwarder/keys/datadog` secret, each with the appropriate endpoint and authentication header. All the telemetry data will be sent to both collectors.
+> [!TIP]
+> You can add multiple configurations secrets under the same prefix, if for whatever reason you want to forward to multiple collectors. The forwarder will load all the collectors and send the telemetry data to all of them, in parallel. For instance, you could create a `lambda-otlp-forwarder/keys/honeycomb` and a `lambda-otlp-forwarder/keys/datadog` secret, each with the appropriate endpoint and authentication header. All the telemetry data will be sent to both collectors.
 
 
 ### Data Flow
