@@ -2,6 +2,10 @@
 name = "lambda-lw-http-router-core"
 version = "0.1.0"
 edition = "2021"
+description = "Core functionality for lambda-lw-http-router"
+license = "MIT"
+repository = "https://github.com/dev7a/lambda-otlp-forwarder/tree/main/packages/rust/lambda-lw-http-router/router-core"
+authors = ["Alessandro Bologna <alessandro.bologna@gmail.com>"]
 
 [dependencies]
 once_cell = "1.17.2"
