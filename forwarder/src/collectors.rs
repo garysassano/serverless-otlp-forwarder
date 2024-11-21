@@ -8,7 +8,6 @@
 //! Collectors configuration is cached and refreshed periodically.
 
 use anyhow::{Context, Result};
-use aws_sdk_secretsmanager::operation::list_secrets::ListSecretsOutput;
 use aws_sdk_secretsmanager::types::Filter;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use serde::{Deserialize, Serialize};
