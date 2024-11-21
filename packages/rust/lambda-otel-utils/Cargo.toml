@@ -26,7 +26,7 @@ lambda_runtime = { version = "0.13.0", features = ["anyhow", "tracing", "opentel
 tracing = { version = "0.1" }
 serde_json = { version = "1.0" }
 http = "1.1.0"
-otlp-stdout-client = { path = "../otlp-stdout-client" }
+otlp-stdout-client = "0.2.0"
 aws_lambda_events = { version = "0.15.1", default-features = false, features = ["apigw", "alb"] }
 opentelemetry-stdout = "0.26.0"
 futures = "0.3.31"
