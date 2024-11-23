@@ -59,16 +59,19 @@ const createProvider = () => {
     [ATTR_SERVICE_NAME]: process.env.AWS_LAMBDA_FUNCTION_NAME || 'my-lambda-function',
   }).merge(awsResource);
 
-  const provider = new NodeTracerProvider({ resource });
-
-  // Configure the stdout exporter
-  const exporter = new StdoutOTLPExporterNode({
-    timeoutMillis: 5000,
-    compression: CompressionAlgorithm.GZIP,  // No compression for Lambda stdout
+  const provider = new NodeTracerProvider({
+    resource,
+    spanProcessors: [
+      // Use BatchSpanProcessor for efficient processing
+      new BatchSpanProcessor(
+        // Configure the stdout exporter
+        new StdoutOTLPExporterNode({
+          timeoutMillis: 5000,
+          compression: CompressionAlgorithm.GZIP, // No compression for Lambda stdout
+        }),
+      ),
+    ],
   });
-
-  // Use BatchSpanProcessor for efficient processing
-  provider.addSpanProcessor(new BatchSpanProcessor(exporter));
 
   return provider;
 };
