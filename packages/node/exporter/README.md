@@ -22,13 +22,13 @@ Install the package along with its peer dependencies:
 
 ```bash
 # Using npm
-npm install @dev7a/otlp-stdout-exporter @opentelemetry/api @opentelemetry/sdk-trace-node @opentelemetry/resources @opentelemetry/semantic-conventions @opentelemetry/resource-detector-aws
+npm install @dev7a/otlp-stdout-exporter @opentelemetry/api @opentelemetry/sdk-trace-node @opentelemetry/resources @opentelemetry/semantic-conventions @opentelemetry/resource-detector-aws @opentelemetry/sdk-trace-base @opentelemetry/core @opentelemetry/otlp-exporter-base
 
 # Using yarn
-yarn add @dev7a/otlp-stdout-exporter @opentelemetry/api @opentelemetry/sdk-trace-node @opentelemetry/resources @opentelemetry/semantic-conventions @opentelemetry/resource-detector-aws
+yarn add @dev7a/otlp-stdout-exporter @opentelemetry/api @opentelemetry/sdk-trace-node @opentelemetry/resources @opentelemetry/semantic-conventions @opentelemetry/resource-detector-aws @opentelemetry/sdk-trace-base @opentelemetry/core @opentelemetry/otlp-exporter-base
 
 # Using pnpm
-pnpm add @dev7a/otlp-stdout-exporter @opentelemetry/api @opentelemetry/sdk-trace-node @opentelemetry/resources @opentelemetry/semantic-conventions @opentelemetry/resource-detector-aws
+pnpm add @dev7a/otlp-stdout-exporter @opentelemetry/api @opentelemetry/sdk-trace-node @opentelemetry/resources @opentelemetry/semantic-conventions @opentelemetry/resource-detector-aws @opentelemetry/sdk-trace-base @opentelemetry/core @opentelemetry/otlp-exporter-base
 ```
 
 
@@ -45,6 +45,7 @@ const { trace, SpanKind, context, propagation } = require('@opentelemetry/api');
 const { StdoutOTLPExporterNode } = require('@dev7a/otlp-stdout-exporter');
 const { AwsLambdaDetectorSync } = require('@opentelemetry/resource-detector-aws');
 const { W3CTraceContextPropagator } = require('@opentelemetry/core');
+const { CompressionAlgorithm } = require('@opentelemetry/otlp-exporter-base');
 
 // Set up W3C Trace Context propagator
 propagation.setGlobalPropagator(new W3CTraceContextPropagator());
@@ -63,7 +64,7 @@ const createProvider = () => {
   // Configure the stdout exporter
   const exporter = new StdoutOTLPExporterNode({
     timeoutMillis: 5000,
-    compression: 'gzip',  // No compression for Lambda stdout
+    compression: CompressionAlgorithm.GZIP,  // No compression for Lambda stdout
   });
 
   // Use BatchSpanProcessor for efficient processing
@@ -159,14 +160,14 @@ OTEL_EXPORTER_OTLP_COMPRESSION=gzip
 
 ### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| OTEL_EXPORTER_OTLP_PROTOCOL | Protocol to use ('http/json' or 'http/protobuf') | 'http/protobuf' |
-| OTEL_EXPORTER_OTLP_ENDPOINT | General endpoint URL | http://localhost:4318 |
-| OTEL_EXPORTER_OTLP_TRACES_ENDPOINT | Traces-specific endpoint URL | - |
-| OTEL_SERVICE_NAME | Service name | - |
-| AWS_LAMBDA_FUNCTION_NAME | Fallback service name | - |
-| OTEL_EXPORTER_OTLP_COMPRESSION | Compression algorithm ('gzip' or 'none') | 'none' |
+| Variable                           | Description                                      | Default               |
+| ---------------------------------- | ------------------------------------------------ | --------------------- |
+| OTEL_EXPORTER_OTLP_PROTOCOL        | Protocol to use ('http/json' or 'http/protobuf') | 'http/protobuf'       |
+| OTEL_EXPORTER_OTLP_ENDPOINT        | General endpoint URL                             | http://localhost:4318 |
+| OTEL_EXPORTER_OTLP_TRACES_ENDPOINT | Traces-specific endpoint URL                     | -                     |
+| OTEL_SERVICE_NAME                  | Service name                                     | -                     |
+| AWS_LAMBDA_FUNCTION_NAME           | Fallback service name                            | -                     |
+| OTEL_EXPORTER_OTLP_COMPRESSION     | Compression algorithm ('gzip' or 'none')         | 'none'                |
 
 ## Output Format
 
