@@ -89,7 +89,7 @@ async function processEvent(event) {
 }
 
 // Example Lambda handler with tracing
-exports.handler = async (event, context) => {
+exports.handler = async (event, lambdaContext) => {
   const parentSpan = tracer.startSpan('lambda_handler', {
     kind: SpanKind.SERVER
   });
