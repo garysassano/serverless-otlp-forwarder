@@ -22,13 +22,13 @@ Install the package along with its peer dependencies:
 
 ```bash
 # Using npm
-npm install @dev7a/otlp-stdout-exporter @opentelemetry/api @opentelemetry/sdk-trace-node @opentelemetry/resources @opentelemetry/semantic-conventions
+npm install @dev7a/otlp-stdout-exporter @opentelemetry/api @opentelemetry/sdk-trace-node @opentelemetry/resources @opentelemetry/semantic-conventions @opentelemetry/resource-detector-aws
 
 # Using yarn
-yarn add @dev7a/otlp-stdout-exporter @opentelemetry/api @opentelemetry/sdk-trace-node @opentelemetry/resources @opentelemetry/semantic-conventions
+yarn add @dev7a/otlp-stdout-exporter @opentelemetry/api @opentelemetry/sdk-trace-node @opentelemetry/resources @opentelemetry/semantic-conventions @opentelemetry/resource-detector-aws
 
 # Using pnpm
-pnpm add @dev7a/otlp-stdout-exporter @opentelemetry/api @opentelemetry/sdk-trace-node @opentelemetry/resources @opentelemetry/semantic-conventions
+pnpm add @dev7a/otlp-stdout-exporter @opentelemetry/api @opentelemetry/sdk-trace-node @opentelemetry/resources @opentelemetry/semantic-conventions @opentelemetry/resource-detector-aws
 ```
 
 
