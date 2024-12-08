@@ -1,0 +1,46 @@
+[package]
+name = "otlp-sigv4-client"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "AWS SigV4 authentication client for OpenTelemetry"
+repository = "https://github.com/alessandrobologna/lambda-otlp-forwarder"
+readme = "README.md"
+keywords = ["opentelemetry", "otlp", "aws", "sigv4", "authentication"]
+categories = ["development-tools::debugging", "development-tools::profiling", "web-programming"]
+homepage = "https://github.com/dev7a/lambda-otlp-forwarder"
+documentation = "https://docs.rs/otlp-sigv4-client"
+exclude = ["tests/*", "examples/*", "benches/*"]
+
+[dependencies]
+async-trait.workspace = true
+aws-smithy-runtime-api.workspace = true
+http.workspace = true
+opentelemetry.workspace = true
+opentelemetry-http.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+aws-credential-types = "1.2.1"
+aws-sigv4 = "1.2.6"
+bytes = "1.7"
+
+# Optional dependencies based on features
+reqwest = { workspace = true, optional = true }
+
+[dev-dependencies]
+aws-config.workspace = true
+tokio.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
+doc-comment = "0.3"
+
+[features]
+default = ["reqwest"]
+reqwest = ["dep:reqwest", "opentelemetry-http/reqwest"]
+hyper = ["opentelemetry-http/hyper"]
+
+[[example]]
+name = "sigv4_auth"
+path = "examples/sigv4_auth/main.rs"
