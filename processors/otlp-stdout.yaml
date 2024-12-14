@@ -14,6 +14,13 @@ Parameters:
     Type: String
     Description: The TTL for the collector cache.
     Default: '300'
+  RouteAllLogs:
+    Type: String
+    Default: 'true'
+    Description: 'Route all AWS logs to the Lambda function'
+
+Conditions:
+  RouteAllLogs: !Equals [!Ref RouteAllLogs, 'true']
 
 Globals:
   Function:

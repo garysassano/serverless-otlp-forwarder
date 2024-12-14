@@ -48,7 +48,6 @@ Conditions:
   IsAwsAppSignalsProcessor: !Equals [!Ref ProcessorType, "aws-appsignals"]
   DeployDemo: !Equals [!Ref DeployDemo, 'true']
   DeployBenchmark: !Equals [!Ref DeployBenchmark, 'true']
-  RouteAllLogs: !Equals [!Ref RouteAllLogs, 'true']
 
 Resources:
   OtlpStdoutProcessor:
