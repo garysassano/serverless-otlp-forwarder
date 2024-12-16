@@ -3,7 +3,8 @@ description: Serverless OpenTelemetry data forwarding for AWS Lambda
 theme: just-the-docs
 logo: "/assets/images/logo.png"
 favicon_ico: "/assets/images/favicon.ico"
-url: https://dev7a.github.io/serverless-otlp-forwarder
+url: https://dev7a.github.io
+baseurl: /serverless-otlp-forwarder
 
 # Theme settings
 heading_anchors: true
@@ -13,6 +14,10 @@ last_edit_time_format: "%b %e %Y at %I:%M %p"
 
 # Theme
 color_scheme: theme
+color_schemes:
+  - light
+  - theme
+  - monochrome
 
 # Breadcrumbs settings
 breadcrumb_home_label: 'Home'
