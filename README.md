@@ -19,42 +19,6 @@ The Serverless OTLP Forwarder enables serverless applications to send OpenTeleme
 - 🔄 **Language Support**: Native implementations for Rust, Python, and Node.js
 - 📊 **AWS Application Signals**: Experimental integration support
 
-## Quick Start
-
-1. Install prerequisites:
-   ```bash
-   # Install AWS SAM CLI
-   brew install aws-sam-cli  # or your preferred package manager
-
-   # For Rust development (optional)
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   cargo install cargo-lambda
-   ```
-
-2. Configure a collector:
-  ```bash
-  # Create a configuration in AWS Secrets Manager
-  aws secretsmanager create-secret \
-    --name "serverless-otlp-forwarder/keys/default" \
-    --secret-string '{
-      "name": "my-collector",
-      "endpoint": "https://collector.example.com",
-      "auth": "x-api-key=your-api-key"
-    }'
-  ```
-
-3. Deploy the forwarder:
-   ```bash
-   git clone https://github.com/dev7a/serverless-otlp-forwarder
-   cd serverless-otlp-forwarder
-   sam build --parallel && sam deploy --guided
-   ```
-
-4. Instrument your application using our language-specific libraries:
-   - [Rust Guide](https://dev7a.github.io/serverless-otlp-forwarder/languages/rust)
-   - [Python Guide](https://dev7a.github.io/serverless-otlp-forwarder/languages/python)
-   - [Node.js Guide](https://dev7a.github.io/serverless-otlp-forwarder/languages/nodejs)
-
 ## Documentation
 
 Visit the [documentation site](https://dev7a.github.io/serverless-otlp-forwarder) for:
@@ -62,6 +26,41 @@ Visit the [documentation site](https://dev7a.github.io/serverless-otlp-forwarder
 - [Configuration Guide](https://dev7a.github.io/serverless-otlp-forwarder/getting-started/configuration)
 - [Architecture Overview](https://dev7a.github.io/serverless-otlp-forwarder/concepts/architecture)
 - [Technical Concepts](https://dev7a.github.io/serverless-otlp-forwarder/concepts)
+
+## Quick Start
+
+1. Install prerequisites:
+   ```bash
+   # Install AWS SAM CLI
+   brew install aws-sam-cli  # or your preferred package manager
+
+   # Install rust and cargo lambda
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   cargo install cargo-lambda
+   ```
+2. Configure a collector:
+   ```bash
+   # Create a configuration in AWS Secrets Manager
+   aws secretsmanager create-secret \
+      --name "serverless-otlp-forwarder/keys/default" \
+      --secret-string '{
+        "name": "my-collector",
+        "endpoint": "https://collector.example.com",
+        "auth": "x-api-key=your-api-key"
+      }'
+   ```
+3. Deploy the forwarder:
+   ```bash
+   # Clone the repository
+   git clone https://github.com/dev7a/serverless-otlp-forwarder && cd serverless-otlp-forwarder
+   # Deploy
+   sam build --parallel && sam deploy --guided
+   ```
+
+4. Instrument your application using our language-specific libraries:
+   - [Rust Guide](https://dev7a.github.io/serverless-otlp-forwarder/languages/rust)
+   - [Python Guide](https://dev7a.github.io/serverless-otlp-forwarder/languages/python)
+   - [Node.js Guide](https://dev7a.github.io/serverless-otlp-forwarder/languages/nodejs)
 
 ## License
 
