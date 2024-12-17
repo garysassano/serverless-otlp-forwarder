@@ -1,12 +1,12 @@
 # Serverless OTLP Forwarder
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
-[![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-enabled-blue.svg?style=for-the-badge)](https://opentelemetry.io)
-![AWS Lambda](https://img.shields.io/badge/AWS-Lambda-orange?logo=amazon-aws&style=for-the-badge)
-[![Rust](https://img.shields.io/badge/Rust-1.70%2B-orange.svg?style=for-the-badge)](https://www.rust-lang.org)
-[![Python](https://img.shields.io/badge/Python-3.12%2B-blue.svg?style=for-the-badge)](https://www.python.org)
-[![Node.js](https://img.shields.io/badge/Node.js-18.x-green.svg?style=for-the-badge)](https://nodejs.org)
-![Stability: Experimental](https://img.shields.io/badge/stability-Experimental-important.svg?style=for-the-badge)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-enabled-blue.svg)](https://opentelemetry.io)
+![AWS Lambda](https://img.shields.io/badge/AWS-Lambda-orange?logo=amazon-aws)
+[![Rust](https://img.shields.io/badge/Rust-1.70%2B-orange.svg)](https://www.rust-lang.org)
+[![Python](https://img.shields.io/badge/Python-3.12%2B-blue.svg)](https://www.python.org)
+[![Node.js](https://img.shields.io/badge/Node.js-18.x-green.svg)](https://nodejs.org)
+![Stability: Experimental](https://img.shields.io/badge/stability-Experimental-important.svg)
 
 ![diagram](https://github.com/user-attachments/assets/aa9c2b02-5e66-4829-af08-8ceb509472ff)
 
@@ -62,6 +62,12 @@ Visit the [documentation site](https://dev7a.github.io/serverless-otlp-forwarder
    - [Rust Guide](https://dev7a.github.io/serverless-otlp-forwarder/languages/rust)
    - [Python Guide](https://dev7a.github.io/serverless-otlp-forwarder/languages/python)
    - [Node.js Guide](https://dev7a.github.io/serverless-otlp-forwarder/languages/nodejs)
+
+## Background
+
+This project addresses specific challenges in serverless observability, particularly the performance impact of traditional OpenTelemetry collection methods. The standard approach using OTEL/ADOT Lambda Layer extensions introduces significant overhead through sidecar agents, affecting both cold start times and runtime performance.
+
+This becomes especially relevant in scenarios requiring memory-optimized Lambda functions, where the resource overhead of traditional collectors can offset the benefits of memory optimization. The forwarder approach provides an alternative that maintains telemetry capabilities while minimizing resource utilization.
 
 ## License
 
