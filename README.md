@@ -31,14 +31,26 @@ The Serverless OTLP Forwarder enables serverless applications to send OpenTeleme
    cargo install cargo-lambda
    ```
 
-2. Deploy the forwarder:
+2. Configure a collector:
+  ```bash
+  # Create a configuration in AWS Secrets Manager
+  aws secretsmanager create-secret \
+    --name "serverless-otlp-forwarder/keys/default" \
+    --secret-string '{
+      "name": "my-collector",
+      "endpoint": "https://collector.example.com",
+      "auth": "x-api-key=your-api-key"
+    }'
+  ```
+
+3. Deploy the forwarder:
    ```bash
    git clone https://github.com/dev7a/serverless-otlp-forwarder
    cd serverless-otlp-forwarder
-   sam build && sam deploy --guided
+   sam build --parallel && sam deploy --guided
    ```
 
-3. Instrument your application using our language-specific libraries:
+4. Instrument your application using our language-specific libraries:
    - [Rust Guide](https://dev7a.github.io/serverless-otlp-forwarder/languages/rust)
    - [Python Guide](https://dev7a.github.io/serverless-otlp-forwarder/languages/python)
    - [Node.js Guide](https://dev7a.github.io/serverless-otlp-forwarder/languages/nodejs)
