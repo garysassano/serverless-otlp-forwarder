@@ -11,7 +11,7 @@ has_children: false
 {: .fs-9 }
 
 Additional experimental crates for AWS Lambda and OpenTelemetry integration.
-{: .fs-6 .fw-300 }
+{: .fs-6 .fw-300 .text-grey-dk-000}
 
 {: .warning }
 > These crates are experimental and under active development. APIs and features may change.

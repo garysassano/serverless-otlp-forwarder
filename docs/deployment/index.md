@@ -9,7 +9,7 @@ has_children: false
 {: .fs-9 }
 
 Deploy and configure Serverless OTLP Forwarder for your observability needs.
-{: .fs-6 .fw-300 }
+{: .fs-6 .fw-300 .text-grey-dk-000}
 
 ## Prerequisites
 {: .text-delta }

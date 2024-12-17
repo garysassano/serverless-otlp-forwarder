@@ -9,7 +9,7 @@ has_children: true
 {: .fs-9 }
 
 Language-specific packages for Serverless OTLP Forwarder integration.
-{: .fs-6 .fw-300 }
+{: .fs-6 .fw-300 .text-grey-dk-000}
 
 ## Supported Languages
 {: .text-delta }

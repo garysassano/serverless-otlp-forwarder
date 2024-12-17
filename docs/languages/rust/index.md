@@ -10,7 +10,7 @@ nav_order: 1
 {: .fs-9 }
 
 OpenTelemetry exporter for AWS Lambda that writes telemetry data to stdout in OTLP format.
-{: .fs-6 .fw-300 }
+{: .fs-6 .fw-300 .text-grey-dk-000 }
 
 ## Quick Links
 {: .text-delta }

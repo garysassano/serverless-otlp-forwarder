@@ -13,11 +13,11 @@ The Serverless OTLP Forwarder enables serverless applications to send OpenTeleme
 
 ## Key Features
 
-- 🚀 **Reduced Latency**: Minimal impact on Lambda execution and cold start times
-- 🔒 **Enhanced Security**: Keeps telemetry data within AWS infrastructure
+- 🚀 **Minimal Performance Impact**: Optimized for Lambda execution and cold start times
+- 🔒 **Secure by Design**: Uses CloudWatch Logs for data transport, no direct collector exposure
 - 💰 **Cost Optimization**: Supports compression and efficient protocols
-- 🔄 **Multiple Languages**: Support for Rust, Python, and Node.js
-- 📊 **AWS Application Signals**: Experimental support for AWS Application Signals
+- 🔄 **Language Support**: Native implementations for Rust, Python, and Node.js
+- 📊 **AWS Application Signals**: Experimental integration support
 
 ## Quick Start
 
@@ -49,7 +49,7 @@ Visit the [documentation site](https://dev7a.github.io/serverless-otlp-forwarder
 - [Getting Started Guide](https://dev7a.github.io/serverless-otlp-forwarder/getting-started)
 - [Configuration Guide](https://dev7a.github.io/serverless-otlp-forwarder/getting-started/configuration)
 - [Architecture Overview](https://dev7a.github.io/serverless-otlp-forwarder/concepts/architecture)
-
+- [Technical Concepts](https://dev7a.github.io/serverless-otlp-forwarder/concepts)
 
 ## License
 

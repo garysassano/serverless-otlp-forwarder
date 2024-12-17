@@ -9,9 +9,9 @@ has_children: true
 {: .fs-9 }
 
 Technical overview of Serverless OTLP Forwarder's architecture and components.
-{: .fs-6 .fw-300 }
+{: .fs-6 .fw-300 .text-grey-dk-000  }
 
-## Overview
+## Introduction
 {: .text-delta }
 
 OpenTelemetry is a vendor-neutral, open-source framework for collecting, processing, and exporting telemetry data. In a serverless environment, the implementation of a telemetry pipeline is not as straightforward as in a traditional environment. Long running processes have the advantage of being able to maintain a persistent network connection to the collector, state in memory to buffer data and to periodically flush it to the collector, and retry logic to handle transient failures. And they can afford longer cold start times, needed to initialize the instrumentation libraries, because the initialization is done once and then the process is kept alive.
@@ -19,6 +19,9 @@ OpenTelemetry is a vendor-neutral, open-source framework for collecting, process
 Conversely, Lambda functions are short-lived processes that start and stop frequently. They do not have the ability to guarantee a persistent network connection to the collector, and, while they can buffer data in memory, flushing it to the collector periodically is not trivial, because the execution environment is frozen after the function invocation ends. 
 
 > A possible solution to these challenges is to minimize the cold start impact by limiting the number of instrumentation libraries loaded during initialization, avoiding the establishment of network connections for sending telemetry data, and utilizing the lowest overhead I/O mechanism possible. By writing telemetry data to stdout in a structured format, Lambda functions can leverage the built-in CloudWatch Logs integration as a durable transport layer, without adding significant latency or complexity to the function execution.
+
+## Design Goals
+{: .text-delta }
 
 The Serverless OTLP Forwarder aims to provide a solution to these challenges, at least on Lambda. It implements a serverless telemetry pipeline using AWS services and the OpenTelemetry Protocol (OTLP). The system consists of several key components:
 

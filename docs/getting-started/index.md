@@ -9,7 +9,7 @@ has_children: true
 {: .fs-9 }
 
 Installation and deployment guide for Serverless OTLP Forwarder.
-{: .fs-6 .fw-300 }
+{: .fs-6 .fw-300 .text-grey-dk-000}
 
 {: .info }
 > For OpenTelemetry concepts and terminology, refer to the [OpenTelemetry documentation](https://opentelemetry.io/docs/).

@@ -9,7 +9,7 @@ nav_order: 1
 {: .fs-9 }
 
 Technical implementation details of the Serverless OTLP Forwarder components.
-{: .fs-6 .fw-300 }
+{: .fs-6 .fw-300 .text-grey-dk-000}
 
 ## Component Implementation
 {: .text-delta }
@@ -46,7 +46,7 @@ CloudWatch Logs serves as a durable message queue with several advantages:
 
 The forwarder can subscribe to all logs in an AWS account while efficiently filtering only relevant telemetry data:
 
-```json
+```
 { $.__otel_otlp_stdout = * }
 ```
 

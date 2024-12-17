@@ -9,7 +9,7 @@ nav_order: 2
 {: .fs-9 }
 
 Understanding the available processors in Serverless OTLP Forwarder.
-{: .fs-6 .fw-300 }
+{: .fs-6 .fw-300 .text-grey-dk-000}
 
 ## Overview
 {: .text-delta }
