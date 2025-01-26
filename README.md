@@ -39,7 +39,7 @@ Visit the [documentation site](https://dev7a.github.io/serverless-otlp-forwarder
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    cargo install cargo-lambda
    ```
-2. Configure a collector:
+2. Configure the default collector:
    ```bash
    # Create a configuration in AWS Secrets Manager
    aws secretsmanager create-secret \

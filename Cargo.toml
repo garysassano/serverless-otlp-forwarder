@@ -1,21 +1,18 @@
 [workspace]
 members = [
-    "packages/rust/otlp-stdout-client",
-    "packages/rust/otlp-sigv4-client",
-    "packages/rust/lambda-otel-utils",
-    "packages/rust/lambda-lw-http-router",
-    "packages/rust/lambda-lw-http-router/router-core",
-    "packages/rust/lambda-lw-http-router/router-macro",
+    "packages/rust/*",
     "processors/forwarder",
+    "experimental/aws-span-processor/processor",
+    "experimental/otlp-stdout-kinesis-processor/processor",
     "demo/rust",
-    "demo/hello",
-    "benchmark"
+    "benchmark",
+    "benchmark/proxy", 
 ]
 
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 authors = ["Alessandro Bologna <alessandro.bologna@gmail.com>"]
 license = "MIT"
@@ -29,7 +26,8 @@ lambda-otel-utils = { path = "packages/rust/lambda-otel-utils", version = "0.3.0
 lambda-lw-http-router = { path = "packages/rust/lambda-lw-http-router", version = "0.3.0" }
 lambda-lw-http-router-core = { path = "packages/rust/lambda-lw-http-router/router-core", version = "0.3.0" }
 lambda-lw-http-router-macro = { path = "packages/rust/lambda-lw-http-router/router-macro", version = "0.3.0" }
-
+otlp-stdout-span-exporter = { path = "packages/rust/otlp-stdout-span-exporter", version = "0.1.2" }
+lambda-otel-lite = { path = "packages/rust/lambda-otel-lite", version = "0.1.0" }
 # Runtime and async
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1.82"
@@ -40,14 +38,17 @@ opentelemetry = { version = "0.27.1", features = ["trace"] }
 opentelemetry-http = { version = "0.27.0" }
 opentelemetry_sdk = { version = "0.27.1", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27.0", features = ["http-proto", "http-json", "reqwest-client"] }
+opentelemetry-aws = { version = "0.15.0", features = ["detector-aws-lambda"] }
 tracing = { version = "0.1", features = ["log"] }
 tracing-opentelemetry = "0.28.0"
 
 # AWS related
 aws-config = { version = "1.5.7", features = ["behavior-version-latest"] }
 aws-smithy-runtime-api = { version = "1.7.3", features = ["http-1x"] }
-aws_lambda_events = { version = "0.16.0", default-features = false, features = ["apigw", "alb"] }
+aws_lambda_events = { version = "0.16.0", default-features = false, features = ["apigw", "alb", "sqs"] }
 lambda_runtime = { version = "0.13.0", features = ["anyhow", "tracing", "opentelemetry"] }
+aws-credential-types = "1.1.4"
+aws-sdk-secretsmanager = { version = "1.48.0", features = ["behavior-version-latest"] }
 
 # HTTP and networking
 reqwest = { version = "0.12.7", default-features = false, features = ["json", "rustls-tls"] }
