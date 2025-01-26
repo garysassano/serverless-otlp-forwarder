@@ -1,0 +1,15 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: AWS Lambda Extension that forwards OTLP records to OpenTelemetry collectors
+
+Resources:
+  StdoutKinesisOTLPLayer:
+    Type: AWS::Serverless::LayerVersion
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      LayerName: !Sub '${AWS::StackName}-rust-extension'
+      ContentUri: layer/
+      CompatibleArchitectures:
+        - arm64

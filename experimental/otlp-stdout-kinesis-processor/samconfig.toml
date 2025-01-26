@@ -1,0 +1,11 @@
+version = 0.1
+[default.global.parameters]
+stack_name = "serverless-otlp-forwarder-kinesis-processor"
+beta_features = "yes"
+
+[default.deploy.parameters]
+resolve_s3 = true
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "CollectorsSecretsKeyPrefix=\"serverless-otlp-forwarder/keys\" CollectorsCacheTtlSeconds=\"300\" SubnetIds=\"\" VpcId=\"\" KinesisStreamMode=\"PROVISIONED\" ShardCount=\"1\""
+image_repositories = []

@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: AWS Lambda function that processes CloudWatch Logs containing spans and forwards them to OpenTelemetry collectors
+
+Parameters:
+  CollectorsSecretsKeyPrefix:
+    Type: String
+    Default: otlp-forwarder
+    Description: Prefix for the collectors configuration secrets in AWS Secrets Manager 
+  CollectorsCacheTtlSeconds:
+    Type: Number
+    Default: 300
+    Description: TTL in seconds for the collectors configuration cache
+  SpanLogGroupName:
+    Type: String
+    Description: Log group name for spans
+    Default: 'aws/spans'
+  VpcId:
+    Type: String
+    Description: (Optional) VPC ID for VPC deployment
+    Default: ''
+  SubnetIds:
+    Type: CommaDelimitedList
+    Description: (Optional) List of subnet IDs for VPC deployment
+    Default: ''
+
+Conditions:
+  HasVpcConfig: !Not [!Equals [!Ref VpcId, '']]
+
+Resources:
+  SpanProcessorFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Ref AWS::StackName
+      Description: !Sub 'Processes aws/spans from AWS Account ${AWS::AccountId}'
+      CodeUri: processor/
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Architectures:
+        - arm64
+      Timeout: 60
+      Environment:
+        Variables:
+          RUST_LOG: info
+          OTEL_SERVICE_NAME: !Ref AWS::StackName
+          OTEL_EXPORTER_OTLP_ENDPOINT: !Sub '{{resolve:secretsmanager:${CollectorsSecretsKeyPrefix}/default:SecretString:endpoint}}'
+          OTEL_EXPORTER_OTLP_HEADERS: !Sub '{{resolve:secretsmanager:${CollectorsSecretsKeyPrefix}/default:SecretString:auth}}'
+          OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+          COLLECTORS_CACHE_TTL_SECONDS: !Ref CollectorsCacheTtlSeconds
+          COLLECTORS_SECRETS_KEY_PREFIX: !Sub '${CollectorsSecretsKeyPrefix}/'
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - 'secretsmanager:BatchGetSecretValue'
+                - 'secretsmanager:ListSecrets'
+                - 'xray:PutTraceSegments'
+                - 'xray:PutSpans'
+                - 'xray:PutSpansForIndexing'
+              Resource: '*'
+            - Effect: Allow
+              Action:
+                - 'secretsmanager:GetSecretValue'
+              Resource: !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${CollectorsSecretsKeyPrefix}/*'
+      VpcConfig: !If 
+        - HasVpcConfig
+        - SecurityGroupIds: 
+            - !Ref SpanProcessorSecurityGroup
+          SubnetIds: !Ref SubnetIds
+        - !Ref AWS::NoValue
+
+  SpanProcessorSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: HasVpcConfig
+    Properties:
+      GroupDescription: Security group for OTLP Span Processor Lambda
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  SpanProcessorSubscription:
+    Type: AWS::Logs::SubscriptionFilter
+    Properties:
+      LogGroupName: !Ref SpanLogGroupName
+      FilterPattern: '' # Empty pattern to capture all logs
+      DestinationArn: !GetAtt SpanProcessorFunction.Arn
+
+  SpanProcessorPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref SpanProcessorFunction
+      Principal: logs.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${SpanLogGroupName}:*'
+
+Outputs:
+  SpanProcessorFunctionName:
+    Description: Name of the Span processor Lambda function
+    Value: !Ref SpanProcessorFunction
+
+  SpanProcessorFunctionArn:
+    Description: ARN of the Span processor Lambda function
+    Value: !GetAtt SpanProcessorFunction.Arn
+
+  SpanProcessorSecurityGroupId:
+    Description: ID of the security group for the Span processor Lambda function
+    Condition: HasVpcConfig
+    Value: !Ref SpanProcessorSecurityGroup
