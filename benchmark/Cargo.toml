@@ -7,19 +7,33 @@ license.workspace = true
 rust-version.workspace = true
 description = "CLI tool for benchmarking OpenTelemetry Lambda implementations"
 
+[features]
+default = ["screenshots"]
+screenshots = ["headless_chrome"]
+
 [dependencies]
 aws-config.workspace = true
-aws-sdk-lambda = "1.59.0"
+
 tokio.workspace = true
-clap = { version = "4.4.8", features = ["derive"] }
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml = "0.9"
 anyhow.workspace = true
 tracing.workspace = true
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-base64 = "0.22.1" 
 futures.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-http.workspace = true
+aws-credential-types = "1.1.4"
+lambda-otel-utils.workspace = true
+otlp-sigv4-client.workspace = true
+tracing-opentelemetry.workspace = true
+reqwest.workspace = true
+clap = { version = "4.4.8", features = ["derive"] }
+aws-sdk-lambda = "1.59.0"
+base64 = "0.22.1" 
 indicatif = { version = "0.17", features = ["improved_unicode"] }
 chrono = { version = "0.4", features = ["serde"] }
 tera = "1.19.1"
-headless_chrome = "1.0.9"
+headless_chrome = { version = "1.0.9", optional = true }
+aws-sdk-cloudformation = "1.26.0"

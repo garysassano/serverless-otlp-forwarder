@@ -1,0 +1,3 @@
+# ignoring samconfig.toml as it may contain secrets
+# SAM configuration file
+samconfig.toml

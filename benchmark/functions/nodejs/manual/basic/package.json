@@ -1,0 +1,9 @@
+{
+  "name": "otel-io-benchmark-function",
+  "version": "1.0.0",
+  "description": "OpenTelemetry I/O Lambda Benchmark Function",
+  "main": "io_test.js",
+  "dependencies": {
+    "@dev7a/lambda-otel-lite": "^0.4.0"
+  }
+}
