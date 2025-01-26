@@ -3,13 +3,6 @@ Transform: 'AWS::Serverless-2016-10-31'
 Description: AWS SAM template for the serverless-otlp-forwarder application.
 
 Parameters:
-  NestedStackName:
-    Type: String
-    Description: The name of the nested stack
-  ExporterEndpoint:
-    Type: String
-    Description: The endpoint of the OTLP exporter
-    Default: http://localhost:4318
   ExporterProtocol:
     Type: String
     Description: The protocol of the OTLP exporter
@@ -18,33 +11,37 @@ Parameters:
     Type: String
     Description: The compression of the OTLP exporter
     Default: gzip
-  TracingEnabled:
-    Type: String
-    Description: Whether to enable X-Ray tracing
-    Default: false
 
-Conditions:
-  TracingEnabled: !Equals [!Ref TracingEnabled, true]
 
 Globals:
   Function:
     MemorySize: 128
+    Timeout: 30
     Architectures:
       - arm64
     LoggingConfig:
       LogFormat: JSON
       ApplicationLogLevel: INFO
       SystemLogLevel: WARN
-    Tracing: !If [TracingEnabled, Active, PassThrough]
+    Environment:
+      Variables:
+        OTEL_EXPORTER_OTLP_PROTOCOL: !Ref ExporterProtocol
+        OTEL_EXPORTER_OTLP_COMPRESSION: !Ref ExporterCompression
   
 
 Resources:
+  QuotesQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-quotes-queue'
+      VisibilityTimeout: 180
+      MessageRetentionPeriod: 345600  # 4 days
+
   BackendApi:
     Type: AWS::Serverless::Api
     Properties:
-      Name: !Sub '${NestedStackName}-api'
+      Name: !Sub '${AWS::StackName}-api'
       StageName: prod
-      TracingEnabled: !Ref TracingEnabled
       EndpointConfiguration:
         Type: REGIONAL
 
@@ -56,8 +53,8 @@ Resources:
       BuildProperties:
         Binary: hello
     Properties:
-      FunctionName: !Sub '${NestedStackName}-lambda-hello'
-      CodeUri: ./hello
+      FunctionName: !Sub '${AWS::StackName}-lambda-hello'
+      CodeUri: ./rust
       Handler: bootstrap
       Runtime: provided.al2023
       Description: 'Demo Hello Lambda function to showcase OpenTelemetry integration'
@@ -66,10 +63,45 @@ Resources:
       Environment:
         Variables:
           RUST_LOG: info
-          OTEL_EXPORTER_OTLP_ENDPOINT: !Ref ExporterEndpoint
-          OTEL_EXPORTER_OTLP_PROTOCOL: !Ref ExporterProtocol
-          OTEL_EXPORTER_OTLP_COMPRESSION: !Ref ExporterCompression
-          OTEL_SERVICE_NAME: !Sub '${NestedStackName}-lambda-hello'
+          OTEL_SERVICE_NAME: !Sub '${AWS::StackName}-lambda-hello'
+
+  RustSimpleLambdaFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: simple
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-lambda-simple'
+      CodeUri: ./rust
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Description: 'Demo Simple Lambda function to showcase OpenTelemetry integration'
+      FunctionUrlConfig:
+        AuthType: NONE
+      Environment:
+        Variables:
+          RUST_LOG: info
+          OTEL_SERVICE_NAME: !Sub '${AWS::StackName}-lambda-simple'
+
+  RustTowerLambdaFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: tower
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-lambda-tower'
+      CodeUri: ./rust
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Description: 'Demo Tower Lambda function to showcase OpenTelemetry integration'
+      FunctionUrlConfig:
+        AuthType: NONE
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub '${AWS::StackName}-lambda-tower'
+          AWS_LAMBDA_EXEC_WRAPPER: /var/task/bootstrap
 
   BackendLambdaFunction:
     Type: AWS::Serverless::Function
@@ -78,7 +110,7 @@ Resources:
       BuildProperties:
         Binary: backend
     Properties:
-      FunctionName: !Sub '${NestedStackName}-lambda-backend'
+      FunctionName: !Sub '${AWS::StackName}-lambda-backend'
       CodeUri: ./rust
       Handler: bootstrap
       Runtime: provided.al2023
@@ -89,11 +121,8 @@ Resources:
       Environment:
         Variables:
           RUST_LOG: info
-          OTEL_EXPORTER_OTLP_ENDPOINT: !Ref ExporterEndpoint
-          OTEL_EXPORTER_OTLP_PROTOCOL: !Ref ExporterProtocol
-          OTEL_EXPORTER_OTLP_COMPRESSION: !Ref ExporterCompression
-          OTEL_SERVICE_NAME: !Sub '${NestedStackName}-lambda-backend'
-          TABLE_NAME: !Sub '${NestedStackName}-table'
+          OTEL_SERVICE_NAME: !Sub '${AWS::StackName}-lambda-backend'
+          TABLE_NAME: !Sub '${AWS::StackName}-table'
       Events:
         PostQuote:
           Type: Api
@@ -121,7 +150,7 @@ Resources:
       BuildProperties:
         Binary: frontend
     Properties:
-      FunctionName: !Sub '${NestedStackName}-lambda-frontend'
+      FunctionName: !Sub '${AWS::StackName}-lambda-frontend'
       CodeUri: ./rust
       Handler: bootstrap
       Runtime: provided.al2023
@@ -131,51 +160,46 @@ Resources:
       Environment:
         Variables:
           RUST_LOG: info
-          OTEL_EXPORTER_OTLP_ENDPOINT: !Ref ExporterEndpoint
-          OTEL_EXPORTER_OTLP_PROTOCOL: http/json
-          OTEL_EXPORTER_OTLP_COMPRESSION: none
-          OTEL_SERVICE_NAME: !Sub '${NestedStackName}-lambda-frontend'
+          OTEL_SERVICE_NAME: !Sub '${AWS::StackName}-lambda-frontend'
           TARGET_URL: !Sub 'https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod'
 
 
   PythonLambdaFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub '${NestedStackName}-python-client'
+      FunctionName: !Sub '${AWS::StackName}-python-client'
       CodeUri: ./python
       Handler: main.lambda_handler
       Runtime: python3.12
       Description: 'Demo Python Client Lambda function to showcase OpenTelemetry integration'
       Environment:
         Variables:
-          OTEL_EXPORTER_OTLP_ENDPOINT: !Ref ExporterEndpoint
-          OTEL_EXPORTER_OTLP_PROTOCOL: !Ref ExporterProtocol
-          OTEL_EXPORTER_OTLP_COMPRESSION: !Ref ExporterCompression
-          OTEL_SERVICE_NAME: !Sub '${NestedStackName}-python-client'
+          OTEL_SERVICE_NAME: !Sub '${AWS::StackName}-python-client'
           TARGET_URL: !Sub 'https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod/quotes'
       Events:
-        ScheduleEvent:
-          Type: Schedule
+        SQSEvent:
+          Type: SQS
           Properties:
-            Schedule: rate(5 minutes)
-            Description: "Trigger the Lambda function every time period"
-            Enabled: true
+            Queue: !GetAtt QuotesQueue.Arn
+            BatchSize: 10
+            MaximumBatchingWindowInSeconds: 10
 
   NodeLambdaFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub '${NestedStackName}-node-client'
+      FunctionName: !Sub '${AWS::StackName}-node-client'
       CodeUri: ./node
       Handler: index.handler
       Runtime: nodejs20.x
       Description: 'Demo Node.js Client Lambda function to showcase OpenTelemetry integration'
       Environment:
         Variables:
-          OTEL_EXPORTER_OTLP_ENDPOINT: !Ref ExporterEndpoint
-          OTEL_EXPORTER_OTLP_PROTOCOL: !Ref ExporterProtocol
-          OTEL_EXPORTER_OTLP_COMPRESSION: !Ref ExporterCompression
-          OTEL_SERVICE_NAME: !Sub '${NestedStackName}-node-client'
+          OTEL_SERVICE_NAME: !Sub '${AWS::StackName}-node-client'
           TARGET_URL: !Sub 'https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod/quotes'
+          QUOTES_QUEUE_URL: !Ref QuotesQueue
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt QuotesQueue.QueueName
       Events:
         ScheduleEvent:
           Type: Schedule
@@ -187,7 +211,7 @@ Resources:
   Table:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub '${NestedStackName}-table'
+      TableName: !Sub '${AWS::StackName}-table'
       AttributeDefinitions:
         - AttributeName: pk
           AttributeType: S
@@ -217,4 +241,10 @@ Outputs:
     Value: !GetAtt FrontendLambdaFunctionUrl.FunctionUrl
   HelloWorldUrl:
     Description: 'URL of the Hello World Lambda function'
-    Value: !GetAtt RustHelloLambdaFunctionUrl.FunctionUrl
+    Value: !Sub '${RustHelloLambdaFunctionUrl.FunctionUrl}hello/world'
+  SimpleUrl:
+    Description: 'URL of the Simple Lambda function'
+    Value: !Sub '${RustSimpleLambdaFunctionUrl.FunctionUrl}'
+  TowerUrl:
+    Description: 'URL of the Tower Lambda function'
+    Value: !Sub '${RustTowerLambdaFunctionUrl.FunctionUrl}'

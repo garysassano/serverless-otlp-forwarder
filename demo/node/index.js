@@ -1,100 +1,34 @@
-const { NodeTracerProvider } = require('@opentelemetry/sdk-trace-node');
-const { BatchSpanProcessor } = require('@opentelemetry/sdk-trace-base');
-const { Resource } = require('@opentelemetry/resources');
-const { trace, SpanKind, SpanStatusCode, context, propagation } = require('@opentelemetry/api');
-const { StdoutOTLPExporterNode } = require('@dev7a/otlp-stdout-exporter');
-const { AwsLambdaDetectorSync } = require('@opentelemetry/resource-detector-aws');
-const { W3CTraceContextPropagator } = require('@opentelemetry/core');
-
-// Configure axios with OpenTelemetry
+const { initTelemetry, tracedHandler } = require('@dev7a/lambda-otel-lite');
+const { SpanStatusCode } = require('@opentelemetry/api');
 const { registerInstrumentations } = require('@opentelemetry/instrumentation');
 const { HttpInstrumentation } = require('@opentelemetry/instrumentation-http');
+const { AwsInstrumentation } = require('@opentelemetry/instrumentation-aws-sdk');
+const { tracer, provider } = initTelemetry('demo-function');
 
 registerInstrumentations({
+  tracerProvider: provider,
   instrumentations: [
-    new HttpInstrumentation(),
-  ],
+    new AwsInstrumentation(),
+    new HttpInstrumentation()
+  ]
 });
 
-// finally import axios
 const axios = require('axios');
+const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
+const sqs = new SQSClient();
 
 const QUOTES_URL = 'https://dummyjson.com/quotes/random';
-const TARGET_URL = process.env.TARGET_URL;
+const QUEUE_URL = process.env.QUOTES_QUEUE_URL;
 
-// Set up W3C Trace Context propagator
-propagation.setGlobalPropagator(new W3CTraceContextPropagator());
-
-const createProvider = () => {
-  const awsResource = new AwsLambdaDetectorSync().detect();
-  
-  const resource = new Resource({
-    ["service.name"]: process.env.OTEL_SERVICE_NAME || process.env.AWS_LAMBDA_FUNCTION_NAME || 'demo-function',
-    ["faas.name"]: process.env.AWS_LAMBDA_FUNCTION_NAME,
-  }).merge(awsResource);
-
-  const provider = new NodeTracerProvider({
-    resource
-  });
-
-  // Configure the stdout exporter with env based configuration
-  const exporter = new StdoutOTLPExporterNode();
-
-  // Add the exporter to the provider with batch processing
-  provider.addSpanProcessor(new BatchSpanProcessor(exporter));
-
-  return provider;
-};
-
-const provider = createProvider();
-provider.register();
-const tracer = trace.getTracer('demo-function');
-
-// Helper function to get random quote
+// Helper function to get random quote from dummyjson
 async function getRandomQuote() {
-  // Get the parent context
-  const parentContext = context.active();
-  
-  const span = tracer.startSpan('getRandomQuote', parentContext);  // Pass the parent context
-
-  // Set the context with the new span
-  return await context.with(trace.setSpan(parentContext, span), async () => {
+  return tracer.startActiveSpan('getRandomQuote', async (span) => {
     try {
       const response = await axios.get(QUOTES_URL);
       return response.data;
-    } catch (e) {
-      span.recordException(e);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: e.message
-      });
-      throw e;
-    } finally {
-      span.end();
-    }
-  });
-}
-
-// Helper function to save quote
-async function saveQuote(quote) {
-  const parentContext = context.active();
-  
-  const span = tracer.startSpan('saveQuote', parentContext);
-
-  return await context.with(trace.setSpan(parentContext, span), async () => {
-    try {
-      const headers = {
-        'content-type': 'application/json',
-      };
-      
-      // Inject trace context into headers
-      propagation.inject(context.active(), headers);
-      
-      const response = await axios.post(TARGET_URL, quote, { headers });
-      return response.data;
     } catch (error) {
       span.recordException(error);
-      span.setStatus({ code: 1 });
+      span.setStatus({ code: SpanStatusCode.ERROR });
       throw error;
     } finally {
       span.end();
@@ -102,55 +36,107 @@ async function saveQuote(quote) {
   });
 }
 
-exports.handler = async (event, lambdaContext) => {
-  const parentSpan = tracer.startSpan('lambda-invocation', {
-    kind: SpanKind.SERVER,
-    attributes: {
-      'faas.trigger': 'timer'
-    }
-  });
-
-  // Set the root span as active
-  return await context.with(trace.setSpan(context.active(), parentSpan), async () => {
+// Helper function to send quote to SQS
+async function sendQuote(quote) {
+  return tracer.startActiveSpan('sendQuote', async (span) => {
     try {
-      parentSpan.addEvent('Lambda Invocation Started');
-
-      // Get random quote
-      const quote = await getRandomQuote();
-      parentSpan.addEvent('Random Quote Fetched', {
-        attributes: {
-          severity: 'info',
-          quote: quote.quote
+      const command = new SendMessageCommand({
+        QueueUrl: QUEUE_URL,
+        MessageBody: JSON.stringify(quote),
+        MessageAttributes: {
+          'quote_id': {
+            DataType: 'String',
+            StringValue: quote.id.toString()
+          },
+          'author': {
+            DataType: 'String',
+            StringValue: quote.author
+          }
         }
       });
-
-      // Save the quote
-      const response = await saveQuote(quote);
-      parentSpan.addEvent('Quote Saved', {
-        attributes: {
-          severity: 'info',
-          quote: quote.quote
-        }
-      });
-
-      parentSpan.addEvent('Lambda Execution Completed');
-
-      return {
-        statusCode: 200,
-        body: JSON.stringify({
-          message: 'Hello from demo Lambda!',
-          input: event,
-          quote: quote,
-          response: response
-        })
-      };
+      await sqs.send(command);
     } catch (error) {
-      parentSpan.recordException(error);
-      parentSpan.setStatus({ code: 1 });
+      span.recordException(error);
+      span.setStatus({ code: SpanStatusCode.ERROR });
       throw error;
     } finally {
-      parentSpan.end();
-      await provider.forceFlush();
+      span.end();
+    }
+  });
+}
+
+// Process a single quote
+async function processQuote(span, quoteNumber, totalQuotes) {
+  const quote = await getRandomQuote();
+  
+  span.addEvent('Random Quote Fetched', {
+    'log.severity': 'info',
+    'log.message': `Successfully fetched random quote ${quoteNumber}/${totalQuotes}`,
+    'quote.text': quote.quote,
+    'quote.author': quote.author
+  });
+
+  await sendQuote(quote);
+  
+  span.addEvent('Quote Sent', {
+    'log.severity': 'info',
+    'log.message': `Quote ${quoteNumber}/${totalQuotes} sent to SQS`,
+    'quote.id': quote.id
+  });
+
+  return quote;
+}
+
+// Process a batch of quotes
+async function processBatch(span, batchSize) {
+  const quotes = [];
+  
+  for (let i = 0; i < batchSize; i++) {
+    const quote = await processQuote(span, i + 1, batchSize);
+    quotes.push(quote);
+  }
+  
+  return quotes;
+}
+
+// Lambda handler
+exports.handler = async (event, context) => {
+  return tracedHandler({
+    tracer,
+    provider,
+    name: 'lambda-invocation',
+    event,
+    context,
+    fn: async (span) => {
+      try {
+        span.addEvent('Lambda Invocation Started', {
+          'log.severity': 'info',
+          'log.message': 'Lambda function invocation started'
+        });
+
+        const batchSize = Math.floor(Math.random() * 10) + 1;
+        span.setAttribute('batch.size', batchSize);
+        
+        const quotes = await processBatch(span, batchSize);
+
+        span.addEvent('Batch Processing Completed', {
+          'log.severity': 'info',
+          'log.message': `Successfully processed batch of ${batchSize} quotes`
+        });
+
+        return {
+          statusCode: 200,
+          body: JSON.stringify({
+            message: `Retrieved and sent ${batchSize} random quotes to SQS`,
+            input: event,
+            quotes
+          })
+        };
+      } catch (error) {
+        span.recordException(error);
+        span.setStatus({ code: SpanStatusCode.ERROR });
+        throw error;
+      }
     }
   });
 };
