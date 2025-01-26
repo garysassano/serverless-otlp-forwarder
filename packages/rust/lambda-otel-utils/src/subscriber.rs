@@ -202,6 +202,7 @@ pub struct OpenTelemetrySubscriberBuilder {
     meter_provider: Option<SdkMeterProvider>,
     service_name: Option<&'static str>,
     with_env_filter: bool,
+    env_filter_string: Option<String>,
     with_json_format: bool,
 }
 
@@ -238,6 +239,25 @@ impl OpenTelemetrySubscriberBuilder {
         self
     }
 
+    /// Sets a custom string for the environment filter.
+    ///
+    /// This allows specifying a filter directive string directly instead of using
+    /// the `RUST_LOG` environment variable.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use lambda_otel_utils::OpenTelemetrySubscriberBuilder;
+    ///
+    /// OpenTelemetrySubscriberBuilder::new()
+    ///     .with_env_filter_string("info,my_crate=debug")
+    ///     .init().unwrap();
+    /// ```
+    pub fn with_env_filter_string(mut self, filter: impl Into<String>) -> Self {
+        self.env_filter_string = Some(filter.into());
+        self
+    }
+
     /// Enables or disables JSON formatting for log output.
     pub fn with_json_format(mut self, enabled: bool) -> Self {
         self.with_json_format = enabled;
@@ -263,7 +283,11 @@ impl OpenTelemetrySubscriberBuilder {
         let metrics_layer = self.meter_provider.as_ref().map(create_otel_metrics_layer);
 
         let env_filter = if self.with_env_filter {
-            Some(tracing_subscriber::EnvFilter::from_default_env())
+            if let Some(filter_string) = self.env_filter_string {
+                Some(tracing_subscriber::EnvFilter::new(filter_string))
+            } else {
+                Some(tracing_subscriber::EnvFilter::from_default_env())
+            }
         } else {
             None
         };

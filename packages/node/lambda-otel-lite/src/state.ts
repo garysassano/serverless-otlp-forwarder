@@ -1,47 +1,46 @@
 import { ProcessorMode } from './types';
-import logger from './extension/logger';
+import logger from './logger';
 
 /**
  * A type-safe event signal that can be signaled and listened to
  */
 class Signal {
-    private listeners: Array<() => void> = [];
+  private listeners: Array<() => void> = [];
 
-    /**
+  /**
      * Signal all listeners that the event has occurred
      */
-    signal(): void {
-        this.listeners.forEach(listener => listener());
-    }
+  signal(): void {
+    this.listeners.forEach(listener => listener());
+  }
 
-    /**
+  /**
      * Register a listener to be called when the event is signaled
      */
-    on(listener: () => void): void {
-        this.listeners.push(listener);
-    }
+  on(listener: () => void): void {
+    this.listeners.push(listener);
+  }
 
-    /**
+  /**
      * Remove a listener
      */
-    off(listener: () => void): void {
-        const index = this.listeners.indexOf(listener);
-        if (index !== -1) {
-            this.listeners.splice(index, 1);
-        }
+  off(listener: () => void): void {
+    const index = this.listeners.indexOf(listener);
+    if (index !== -1) {
+      this.listeners.splice(index, 1);
     }
+  }
 }
 
 // Initialize global state if not exists
 if (!(global as any)._lambdaOtelState) {
-    logger.debug('initializing lambda-otel state');
-    (global as any)._lambdaOtelState = {
-        provider: null,
-        mode: null as ProcessorMode | null,
-        extensionInitialized: false,
-        handlerCompleted: false,
-        handlerComplete: new Signal()
-    };
+  logger.debug('initializing lambda-otel state');
+  (global as any)._lambdaOtelState = {
+    provider: null,
+    mode: null as ProcessorMode | null,
+    extensionInitialized: false,
+    handlerComplete: new Signal()
+  };
 }
 
 /**

@@ -9,11 +9,9 @@ import os
 from queue import Queue
 
 from opentelemetry.context import Context, attach, detach, set_value
-from opentelemetry.sdk.trace import ReadableSpan
-from opentelemetry.sdk.trace.export import SpanExporter, SpanProcessor
+from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
+from opentelemetry.sdk.trace.export import SpanExporter
 from opentelemetry.trace import Span
-
-from .extension import debug_timing
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -75,8 +73,7 @@ class LambdaSpanProcessor(SpanProcessor):
             logger.debug("Processing %d spans", len(spans_to_export))
             token = attach(set_value(self._SUPPRESS_INSTRUMENTATION_KEY, True))
             try:
-                with debug_timing(logger, "span_export"):
-                    self.span_exporter.export(spans_to_export)
+                self.span_exporter.export(spans_to_export)
             except Exception as ex:
                 logger.exception("Exception while exporting spans: %s", ex)
             finally:

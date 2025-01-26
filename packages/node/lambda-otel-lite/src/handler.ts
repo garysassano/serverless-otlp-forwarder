@@ -1,9 +1,9 @@
-import { SpanKind, SpanStatusCode, Tracer, Span, Context, Link, trace, ROOT_CONTEXT, propagation } from '@opentelemetry/api';
+import { SpanKind, SpanStatusCode, Tracer, Span, Context, Link, ROOT_CONTEXT, propagation } from '@opentelemetry/api';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { isColdStart, setColdStart } from './telemetry/init';
 import { ProcessorMode } from './types';
 import { state, handlerComplete } from './state';
-import logger from './extension/logger';
+import logger from './logger';
 
 /**
  * Options for the traced handler function
@@ -15,8 +15,6 @@ export interface TracedHandlerOptions<T> {
     provider: NodeTracerProvider;
     /** Name of the span */
     name: string;
-    /** Handler function that receives the span instance */
-    fn: (span: Span) => Promise<T>;
     /** Optional Lambda event object. Used for extracting HTTP attributes and context */
     event?: any;
     /** Optional Lambda context object. Used for extracting FAAS attributes */
@@ -58,13 +56,12 @@ export interface TracedHandlerOptions<T> {
  *     name: 'my-handler',
  *     event,
  *     context,
- *     fn: async (span) => {
- *       // Your handler code here
- *       return {
- *         statusCode: 200,
- *         body: 'Success'
- *       };
- *     }
+ *   }, async (span) => {
+ *     // Your handler code here
+ *     return {
+ *       statusCode: 200,
+ *       body: 'Success'
+ *     };
  *   });
  * };
  * ```
@@ -80,150 +77,175 @@ export interface TracedHandlerOptions<T> {
  *     event,
  *     context,
  *     getCarrier: (evt) => evt.Records[0]?.messageAttributes || {},
- *     fn: async (span) => {
- *       // Your handler code here
- *     }
+ *   }, async (span) => {
+ *     // Your handler code here
  *   });
  * };
  * ```
  * 
  * @template T The return type of the handler function
  * @param options Configuration options for the traced handler
+ * @param fn Handler function that receives the span instance
  * @returns The result of the handler function
  */
-export async function tracedHandler<T>(options: TracedHandlerOptions<T>): Promise<T> {
-    let error: Error | undefined;
-    let result: T;
+export async function tracedHandler<T>(
+  options: TracedHandlerOptions<T>,
+  fn: (span: Span) => Promise<T>
+): Promise<T>;
 
-    try {
-        const wrapCallback = (fn: (span: Span) => Promise<T>) => {
-            return async (span: Span) => {
-                try {
-                    if (isColdStart()) {
-                        span.setAttribute('faas.cold_start', true);
-                    }
+/**
+ * Legacy interface for backward compatibility
+ * @deprecated Use the new interface with separate fn parameter instead
+ */
+export async function tracedHandler<T>(options: TracedHandlerOptions<T> & { fn: (span: Span) => Promise<T> }): Promise<T>;
 
-                    // Extract attributes from Lambda context if available
-                    if (options.context) {
-                        if (options.context.awsRequestId) {
-                            span.setAttribute('faas.invocation_id', options.context.awsRequestId);
-                        }
-                        if (options.context.invokedFunctionArn) {
-                            const arnParts = options.context.invokedFunctionArn.split(':');
-                            if (arnParts.length >= 5) {
-                                span.setAttribute('cloud.resource_id', options.context.invokedFunctionArn);
-                                span.setAttribute('cloud.account.id', arnParts[4]);
-                            }
-                        }
-                    }
+export async function tracedHandler<T>(
+  options: TracedHandlerOptions<T> | (TracedHandlerOptions<T> & { fn: (span: Span) => Promise<T> }),
+  handlerFn?: (span: Span) => Promise<T>
+): Promise<T> {
+  const fn = handlerFn || (options as any).fn;
+  if (!fn) {
+    throw new Error('Handler function is required');
+  }
 
-                    // Extract attributes from Lambda event if available
-                    if (options.event && typeof options.event === 'object') {
-                        if ('version' in options.event && options.event.version === '2.0') {
-                            // API Gateway v2
-                            span.setAttribute('faas.trigger', 'http');
-                            span.setAttribute('http.route', options.event.routeKey || '');
-                            if (options.event.requestContext?.http) {
-                                const http = options.event.requestContext.http;
-                                span.setAttribute('http.method', http.method || '');
-                                span.setAttribute('http.target', http.path || '');
-                                span.setAttribute('http.scheme', (http.protocol || '').toLowerCase());
-                            }
-                        } else if ('httpMethod' in options.event || 'requestContext' in options.event) {
-                            // API Gateway v1
-                            span.setAttribute('faas.trigger', 'http');
-                            span.setAttribute('http.route', options.event.resource || '');
-                            span.setAttribute('http.method', options.event.httpMethod || '');
-                            span.setAttribute('http.target', options.event.path || '');
-                            if (options.event.requestContext?.protocol) {
-                                span.setAttribute('http.scheme', options.event.requestContext.protocol.toLowerCase());
-                            }
-                        }
-                    }
+  let error: Error | undefined;
+  let result: T;
 
-                    // Add custom attributes
-                    if (options.attributes) {
-                        Object.entries(options.attributes).forEach(([key, value]) => {
-                            span.setAttribute(key, value);
-                        });
-                    }
+  try {
+    const wrapCallback = (fn: (span: Span) => Promise<T>) => {
+      return async (span: Span) => {
+        try {
+          if (isColdStart()) {
+            span.setAttribute('faas.cold_start', true);
+          }
 
-                    result = await fn(span);
+          // Set default faas.trigger unconditionally
+          span.setAttribute('faas.trigger', 'other');
 
-                    // Handle HTTP response attributes
-                    if (result && typeof result === 'object' && 'statusCode' in result) {
-                        const statusCode = result.statusCode as number;
-                        span.setAttribute('http.status_code', statusCode);
-                        if (statusCode >= 500) {
-                            span.setStatus({
-                                code: SpanStatusCode.ERROR,
-                                message: `HTTP ${statusCode} response`
-                            });
-                        } else {
-                            span.setStatus({ code: SpanStatusCode.OK });
-                        }
-                    } else {
-                        span.setStatus({ code: SpanStatusCode.OK });
-                    }
-
-                    return result;
-                } catch (e) {
-                    error = e as Error;
-                    span.recordException(error);
-                    span.setStatus({
-                        code: SpanStatusCode.ERROR,
-                        message: error.message
-                    });
-                    throw error;
-                } finally {
-                    span.end();
-                    if (isColdStart()) {
-                        setColdStart(false);
-                    }
-                }
-            };
-        };
-
-        // Extract context from event if available
-        let parentContext = options.parentContext;
-        if (!parentContext && options.event) {
-            try {
-                if (options.getCarrier) {
-                    const carrier = options.getCarrier(options.event);
-                    if (carrier && Object.keys(carrier).length > 0) {
-                        parentContext = propagation.extract(ROOT_CONTEXT, carrier);
-                    }
-                } else if (options.event.headers) {
-                    parentContext = propagation.extract(ROOT_CONTEXT, options.event.headers);
-                }
-            } catch (error) {
-                logger.warn('Failed to extract context:', error);
+          // Extract attributes from Lambda context if available
+          if (options.context) {
+            if (options.context.awsRequestId) {
+              span.setAttribute('faas.invocation_id', options.context.awsRequestId);
             }
-        }
+            if (options.context.invokedFunctionArn) {
+              const arnParts = options.context.invokedFunctionArn.split(':');
+              if (arnParts.length >= 5) {
+                span.setAttribute('cloud.resource_id', options.context.invokedFunctionArn);
+                span.setAttribute('cloud.account.id', arnParts[4]);
+              }
+            }
+          }
 
-        // Start the span
-        result = await options.tracer.startActiveSpan(
-            options.name,
-            {
-                kind: options.kind ?? SpanKind.SERVER,
-                links: options.links,
-                startTime: options.startTime,
-            },
-            parentContext ?? ROOT_CONTEXT,
-            wrapCallback(options.fn)
-        );
+          // Extract attributes from Lambda event if available
+          if (options.event && typeof options.event === 'object') {
+            // HTTP triggers (API Gateway v1 and v2)
+            if ('requestContext' in options.event || 'httpMethod' in options.event) {
+              span.setAttribute('faas.trigger', 'http');
+                            
+              if ('version' in options.event && options.event.version === '2.0') {
+                // API Gateway v2
+                span.setAttribute('http.route', options.event.routeKey || '');
+                if (options.event.requestContext?.http) {
+                  const http = options.event.requestContext.http;
+                  span.setAttribute('http.method', http.method || '');
+                  span.setAttribute('http.target', http.path || '');
+                  span.setAttribute('http.scheme', (http.protocol || '').toLowerCase());
+                }
+              } else {
+                // API Gateway v1
+                span.setAttribute('http.route', options.event.resource || '');
+                span.setAttribute('http.method', options.event.httpMethod || '');
+                span.setAttribute('http.target', options.event.path || '');
+                if (options.event.requestContext?.protocol) {
+                  span.setAttribute('http.scheme', options.event.requestContext.protocol.toLowerCase());
+                }
+              }
+            }
+          }
 
-        return result;
-    } catch (e) {
-        error = e as Error;
-        throw error;
-    } finally {
-        // Handle completion based on processor mode
-        if (state.mode === ProcessorMode.Sync || !state.extensionInitialized) {
-            await options.provider.forceFlush();
-        } else if (state.mode === ProcessorMode.Async) {
-            handlerComplete.signal();
+          // Add custom attributes
+          if (options.attributes) {
+            Object.entries(options.attributes).forEach(([key, value]) => {
+              span.setAttribute(key, value);
+            });
+          }
+
+          result = await fn(span);
+
+          // Handle HTTP response attributes
+          if (result && typeof result === 'object' && 'statusCode' in result) {
+            const statusCode = result.statusCode as number;
+            span.setAttribute('http.status_code', statusCode);
+            if (statusCode >= 500) {
+              span.setStatus({
+                code: SpanStatusCode.ERROR,
+                message: `HTTP ${statusCode} response`
+              });
+            } else {
+              span.setStatus({ code: SpanStatusCode.OK });
+            }
+          } else {
+            span.setStatus({ code: SpanStatusCode.OK });
+          }
+          return result;
+        } catch (e) {
+          error = e as Error;
+          span.recordException(error);
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: error.message
+          });
+          throw error;
+        } finally {
+          span.end();
+          if (isColdStart()) {
+            setColdStart(false);
+          }
         }
+      };
+    };
+
+    // Extract context from event if available
+    let parentContext = options.parentContext;
+    if (!parentContext && options.event) {
+      try {
+        if (options.getCarrier) {
+          const carrier = options.getCarrier(options.event);
+          if (carrier && Object.keys(carrier).length > 0) {
+            parentContext = propagation.extract(ROOT_CONTEXT, carrier);
+          }
+        } else if (options.event.headers) {
+          parentContext = propagation.extract(ROOT_CONTEXT, options.event.headers);
+        }
+      } catch (error) {
+        logger.warn('Failed to extract context:', error);
+      }
     }
+
+    // Start the span
+    result = await options.tracer.startActiveSpan(
+      options.name,
+      {
+        kind: options.kind ?? SpanKind.SERVER,
+        links: options.links,
+        startTime: options.startTime,
+      },
+      parentContext ?? ROOT_CONTEXT,
+      wrapCallback(fn)
+    );
+    logger.info('sending result');
+    return result;
+  } catch (e) {
+    error = e as Error;
+    throw error;
+  } finally {
+    // Handle completion based on processor mode
+    if (state.mode === ProcessorMode.Sync || !state.extensionInitialized) {
+      await options.provider.forceFlush();
+    } else if (state.mode === ProcessorMode.Async) {
+      logger.info('sending handler complete');
+      handlerComplete.signal();
+    }
+  }
 }
 

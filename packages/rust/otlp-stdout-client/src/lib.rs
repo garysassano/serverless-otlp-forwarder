@@ -109,7 +109,6 @@ pub const CONTENT_TYPE_HEADER: &str = "content-type";
 pub const CONTENT_ENCODING_HEADER: &str = "content-encoding";
 
 // Constants for JSON keys
-pub const KEY_OTEL: &str = "_otel";
 pub const KEY_SOURCE: &str = "source";
 pub const KEY_ENDPOINT: &str = "endpoint";
 pub const KEY_METHOD: &str = "method";
@@ -131,7 +130,8 @@ pub struct LogRecord {
     pub endpoint: String,
     pub method: String,
     pub payload: Value,
-    pub headers: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<HashMap<String, String>>,
     #[serde(rename = "content-type")]
     pub content_type: String,
     #[serde(rename = "content-encoding", skip_serializing_if = "Option::is_none")]
@@ -311,7 +311,7 @@ impl StdoutClient {
             endpoint: request.uri().to_string(),
             method: request.method().to_string(),
             payload: final_payload,
-            headers: Self::headers_to_hashmap(request.headers()),
+            headers: Some(Self::headers_to_hashmap(request.headers())),
             content_type: content_type.to_string(),
             content_encoding: self.content_encoding_gzip.clone(),
             base64: Some(should_encode_base64),

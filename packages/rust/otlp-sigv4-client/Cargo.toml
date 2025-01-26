@@ -21,7 +21,6 @@ http.workspace = true
 opentelemetry.workspace = true
 opentelemetry-http.workspace = true
 thiserror.workspace = true
-tracing.workspace = true
 aws-credential-types = "1.2.1"
 aws-sigv4 = "1.2.6"
 bytes = "1.7"

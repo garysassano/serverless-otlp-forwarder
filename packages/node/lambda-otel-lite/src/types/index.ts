@@ -24,19 +24,19 @@ export enum ProcessorMode {
  * @param defaultMode - Default mode if environment variable is not set
  */
 export function processorModeFromEnv(envVar: string = 'LAMBDA_EXTENSION_SPAN_PROCESSOR_MODE', defaultMode: ProcessorMode = ProcessorMode.Async): ProcessorMode {
-    const envValue = process.env[envVar];
-    // Handle undefined, null, or non-string values
-    if (!envValue || typeof envValue !== 'string') {
-        return defaultMode;
-    }
+  const envValue = process.env[envVar];
+  // Handle undefined, null, or non-string values
+  if (!envValue || typeof envValue !== 'string') {
+    return defaultMode;
+  }
 
-    const value = envValue.trim().toLowerCase();
-    if (!value) {
-        return defaultMode;
-    }
+  const value = envValue.trim().toLowerCase();
+  if (!value) {
+    return defaultMode;
+  }
 
-    if (Object.values(ProcessorMode).includes(value as ProcessorMode)) {
-        return value as ProcessorMode;
-    }
-    throw new Error(`Invalid ${envVar}: ${envValue}. Must be one of: ${Object.values(ProcessorMode).join(', ')}`);
+  if (Object.values(ProcessorMode).includes(value as ProcessorMode)) {
+    return value as ProcessorMode;
+  }
+  throw new Error(`Invalid ${envVar}: ${envValue}. Must be one of: ${Object.values(ProcessorMode).join(', ')}`);
 } 

@@ -7,8 +7,9 @@ functions with minimal overhead and configuration.
 
 import os
 from enum import Enum
+from typing import Final
 
-__version__ = "0.1.0"
+__version__ = "0.5.1"
 
 
 class ProcessorMode(str, Enum):
@@ -49,9 +50,15 @@ class ProcessorMode(str, Enum):
             ) from err
 
 
+# Global processor mode - single source of truth for the package
+processor_mode: Final[ProcessorMode] = ProcessorMode.from_env(
+    "LAMBDA_EXTENSION_SPAN_PROCESSOR_MODE", ProcessorMode.SYNC
+)
+
 # Package exports
 __all__ = [
     "ProcessorMode",
+    "processor_mode",  # Export the global processor mode
     "init_telemetry",  # Will be imported from telemetry.py
     "traced_handler",  # Will be imported from handler.py
 ]

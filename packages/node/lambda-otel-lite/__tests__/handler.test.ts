@@ -7,7 +7,7 @@ import * as init from '../src/telemetry/init';
 import { jest, describe, it, beforeEach, expect } from '@jest/globals';
 
 // Mock the logger
-jest.mock('../src/extension/logger', () => ({
+jest.mock('../src/logger', () => ({
     debug: jest.fn(),
     info: jest.fn(),
     warn: jest.fn(),
@@ -31,7 +31,6 @@ jest.mock('../src/state', () => {
         state: {
             mode: 'sync',
             extensionInitialized: false,
-            handlerCompleted: false,
             handlerComplete
         },
         handlerComplete
@@ -92,6 +91,20 @@ describe('tracedHandler', () => {
             expect(mockSpan.setAttribute).toHaveBeenCalledWith('faas.cold_start', true);
             expect(mockSpan.setStatus).toHaveBeenCalledWith({ code: SpanStatusCode.OK });
             expect(mockSpan.end).toHaveBeenCalled();
+        });
+
+        it('should set default faas.trigger for non-HTTP events', async () => {
+            const event = { type: 'custom' };
+            const result = await tracedHandler({
+                tracer,
+                provider,
+                name: 'test-handler',
+                event,
+                fn: async (span) => 'success'
+            });
+
+            expect(result).toBe('success');
+            expect(mockSpan.setAttribute).toHaveBeenCalledWith('faas.trigger', 'other');
         });
 
         it('should work with all options', async () => {
@@ -326,6 +339,83 @@ describe('tracedHandler', () => {
             });
 
             expect(signalSpy).toHaveBeenCalled();
+        });
+    });
+
+    describe('handler interface', () => {
+        it('should work with new interface (separate fn parameter)', async () => {
+            const result = await tracedHandler({
+                tracer,
+                provider,
+                name: 'test-handler',
+                event: { type: 'test' },
+                context: { awsRequestId: '123' },
+            }, async (span) => {
+                span.setAttribute('custom', 'value');
+                return 'success';
+            });
+
+            expect(result).toBe('success');
+            expect(mockSpan.setAttribute).toHaveBeenCalledWith('custom', 'value');
+            expect(mockSpan.setStatus).toHaveBeenCalledWith({ code: SpanStatusCode.OK });
+            expect(mockSpan.end).toHaveBeenCalled();
+        });
+
+        it('should work with legacy interface (fn in options)', async () => {
+            const result = await tracedHandler({
+                tracer,
+                provider,
+                name: 'test-handler',
+                event: { type: 'test' },
+                context: { awsRequestId: '123' },
+                fn: async (span) => {
+                    span.setAttribute('custom', 'value');
+                    return 'success';
+                }
+            });
+
+            expect(result).toBe('success');
+            expect(mockSpan.setAttribute).toHaveBeenCalledWith('custom', 'value');
+            expect(mockSpan.setStatus).toHaveBeenCalledWith({ code: SpanStatusCode.OK });
+            expect(mockSpan.end).toHaveBeenCalled();
+        });
+
+        it('should throw error when no handler function is provided', async () => {
+            await expect(tracedHandler({
+                tracer,
+                provider,
+                name: 'test-handler',
+            } as any)).rejects.toThrow('Handler function is required');
+        });
+
+        it('should handle errors consistently in both interfaces', async () => {
+            const testError = new Error('test error');
+            
+            // Test new interface
+            await expect(tracedHandler({
+                tracer,
+                provider,
+                name: 'test-handler',
+            }, async () => {
+                throw testError;
+            })).rejects.toThrow(testError);
+
+            expect(mockSpan.recordException).toHaveBeenCalledWith(testError);
+            
+            // Reset mocks
+            jest.clearAllMocks();
+
+            // Test legacy interface
+            await expect(tracedHandler({
+                tracer,
+                provider,
+                name: 'test-handler',
+                fn: async () => {
+                    throw testError;
+                }
+            })).rejects.toThrow(testError);
+
+            expect(mockSpan.recordException).toHaveBeenCalledWith(testError);
         });
     });
 }); 

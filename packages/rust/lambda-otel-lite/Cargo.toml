@@ -1,0 +1,40 @@
+[package]
+name = "lambda-otel-lite"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lightweight OpenTelemetry instrumentation for AWS Lambda"
+repository = "https://github.com/dev7a/serverless-otlp-forwarder/tree/main/packages/rust/lambda-otel-lite"
+documentation = "https://docs.rs/lambda-otel-lite"
+readme = "README.md"
+keywords = ["aws", "lambda", "opentelemetry", "tracing", "telemetry"]
+categories = ["development-tools::debugging", "web-programming::http-server"]
+
+[dependencies]
+opentelemetry.workspace = true
+opentelemetry_sdk = { version = "0.27.1", features = ["testing"] }
+tokio.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+otlp-stdout-span-exporter.workspace = true
+urlencoding = "2.1.3"
+lambda_runtime.workspace = true
+lambda-extension = "0.11.0"
+tower = "0.5.2"
+futures-util = "0.3.31"
+futures-executor = "0.3.31"
+tracing-subscriber = "0.3.19"
+tracing-opentelemetry = "0.28.0"
+pin-project = "1.1.8"
+serde.workspace = true
+aws_lambda_events.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["rt", "sync", "macros", "test-util"] }
+mockall = "0.13.1"
+serial_test = "3.2.0"
+opentelemetry-otlp = { workspace = true, features = ["http-proto", "http-json", "reqwest-client"] }
+libc = "0.2"
+doc-comment = "0.3"

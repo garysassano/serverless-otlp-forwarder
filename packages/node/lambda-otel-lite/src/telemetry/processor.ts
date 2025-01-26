@@ -2,7 +2,9 @@ import { Span } from '@opentelemetry/sdk-trace-base';
 import { Context, TraceFlags } from '@opentelemetry/api';
 import { SpanProcessor, ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { ExportResult } from '@opentelemetry/core';
-import { diag } from '@opentelemetry/api';
+import { createLogger } from '../logger';
+
+const logger = createLogger('processor');
 
 /**
  * A fixed-size circular buffer implementation that provides efficient FIFO operations.
@@ -10,50 +12,50 @@ import { diag } from '@opentelemetry/api';
  * allowing for constant time insertions and batch retrievals while efficiently managing memory.
  */
 class CircularBuffer<T> {
-    // The underlying array storage
-    private buffer: T[];
-    // Points to the next item to be removed (oldest item)
-    private head = 0;
-    // Points to the next free slot for insertion
-    private tail = 0;
-    // Current number of items in the buffer
-    private _size = 0;
+  // The underlying array storage
+  private buffer: T[];
+  // Points to the next item to be removed (oldest item)
+  private head = 0;
+  // Points to the next free slot for insertion
+  private tail = 0;
+  // Current number of items in the buffer
+  private _size = 0;
 
-    /**
+  /**
      * Creates a new CircularBuffer with the specified capacity.
      * @param capacity The maximum number of items the buffer can hold
      * @throws {Error} If capacity is less than or equal to 0
      */
-    constructor(private readonly capacity: number) {
-        if (capacity <= 0) {
-            throw new Error('Buffer capacity must be greater than 0');
-        }
-        this.buffer = new Array(capacity);
+  constructor(private readonly capacity: number) {
+    if (capacity <= 0) {
+      throw new Error('Buffer capacity must be greater than 0');
     }
+    this.buffer = new Array(capacity);
+  }
 
-    /**
+  /**
      * Returns the current number of items in the buffer.
      */
-    get size(): number {
-        return this._size;
-    }
+  get size(): number {
+    return this._size;
+  }
 
-    /**
+  /**
      * Attempts to add an item to the buffer.
      * @param item The item to add
      * @returns true if the item was added, false if the buffer is full
      */
-    push(item: T): boolean {
-        if (this._size === this.capacity) {
-            return false;
-        }
-        this.buffer[this.tail] = item;
-        this.tail = (this.tail + 1) % this.capacity;
-        this._size++;
-        return true;
+  push(item: T): boolean {
+    if (this._size === this.capacity) {
+      return false;
     }
+    this.buffer[this.tail] = item;
+    this.tail = (this.tail + 1) % this.capacity;
+    this._size++;
+    return true;
+  }
 
-    /**
+  /**
      * Removes and returns up to maxSize items from the buffer.
      * This operation helps with batch processing while maintaining memory efficiency
      * by clearing references to processed items.
@@ -61,27 +63,27 @@ class CircularBuffer<T> {
      * @param maxSize Maximum number of items to remove
      * @returns Array of removed items
      */
-    drainBatch(maxSize: number): T[] {
-        const batchSize = Math.min(maxSize, this._size);
-        if (batchSize === 0) return [];
+  drainBatch(maxSize: number): T[] {
+    const batchSize = Math.min(maxSize, this._size);
+    if (batchSize === 0) {return [];}
 
-        const items: T[] = new Array(batchSize);
-        for (let i = 0; i < batchSize; i++) {
-            items[i] = this.buffer[this.head];
-            this.buffer[this.head] = undefined as any; // Clear reference for GC
-            this.head = (this.head + 1) % this.capacity;
-            this._size--;
-        }
-        return items;
+    const items: T[] = new Array(batchSize);
+    for (let i = 0; i < batchSize; i++) {
+      items[i] = this.buffer[this.head];
+      this.buffer[this.head] = undefined as any; // Clear reference for GC
+      this.head = (this.head + 1) % this.capacity;
+      this._size--;
     }
+    return items;
+  }
 
-    /**
+  /**
      * Removes and returns all items currently in the buffer.
      * @returns Array of all items
      */
-    drain(): T[] {
-        return this.drainBatch(this._size);
-    }
+  drain(): T[] {
+    return this.drainBatch(this._size);
+  }
 }
 
 /**
@@ -101,12 +103,12 @@ class CircularBuffer<T> {
  * ```
  */
 export class LambdaSpanProcessor implements SpanProcessor {
-    private readonly buffer: CircularBuffer<ReadableSpan>;
-    private isShutdown = false;
-    private droppedSpansCount = 0;
-    private readonly maxExportBatchSize: number;
+  private readonly buffer: CircularBuffer<ReadableSpan>;
+  private isShutdown = false;
+  private droppedSpansCount = 0;
+  private readonly maxExportBatchSize: number;
 
-    /**
+  /**
      * Creates a new LambdaSpanProcessor.
      * 
      * @param exporter - The span exporter to use
@@ -115,126 +117,126 @@ export class LambdaSpanProcessor implements SpanProcessor {
      * @param config.maxExportBatchSize - Maximum number of spans to export in each batch (default: 512).
      *                                    Lower values reduce event loop blocking but may decrease throughput.
      */
-    constructor(
+  constructor(
         private readonly exporter: SpanExporter,
         config?: { maxQueueSize?: number; maxExportBatchSize?: number }
-    ) {
-        const maxQueueSize = config?.maxQueueSize || 2048;
-        this.maxExportBatchSize = config?.maxExportBatchSize || 64;
-        this.buffer = new CircularBuffer<ReadableSpan>(maxQueueSize);
-    }
+  ) {
+    const maxQueueSize = config?.maxQueueSize || 2048;
+    this.maxExportBatchSize = config?.maxExportBatchSize || 64;
+    this.buffer = new CircularBuffer<ReadableSpan>(maxQueueSize);
+  }
 
-    /**
+  /**
      * Forces a flush of all buffered spans.
      * This should be called before the Lambda function ends to ensure all spans are exported.
      * 
      * @returns Promise that resolves when all spans have been exported
      */
-    forceFlush(): Promise<void> {
-        if (this.isShutdown) {
-            diag.warn('Cannot force flush - span processor is shutdown');
-            return Promise.resolve();
-        }
-        return this.flush();
+  forceFlush(): Promise<void> {
+    if (this.isShutdown) {
+      logger.warn('Cannot force flush - span processor is shutdown');
+      return Promise.resolve();
     }
+    return this.flush();
+  }
 
-    /**
+  /**
      * Called when a span starts. Currently a no-op as we only process spans on end.
      */
-    onStart(_span: Span, _context: Context): void {}
+  onStart(_span: Span, _context: Context): void {}
 
-    /**
+  /**
      * Called when a span ends. The span is added to the buffer if it is sampled.
      * If the buffer is full, the span will be dropped and counted in droppedSpansCount.
      * 
      * @param span - The span that has ended
      */
-    onEnd(span: ReadableSpan): void {
-        if (this.isShutdown) {
-            diag.warn('span processor is shutdown, dropping span');
-            return;
-        }
+  onEnd(span: ReadableSpan): void {
+    if (this.isShutdown) {
+      logger.warn('span processor is shutdown, dropping span');
+      return;
+    }
         
-        // Skip unsampled spans
-        if ((span.spanContext().traceFlags & TraceFlags.SAMPLED) === 0) {
-            return;
-        }
-
-        try {
-            this.addToBuffer(span);
-        } catch (error) {
-            diag.error('failed to queue span:', error);
-        }
+    // Skip unsampled spans
+    if ((span.spanContext().traceFlags & TraceFlags.SAMPLED) === 0) {
+      return;
     }
 
-    /**
+    try {
+      this.addToBuffer(span);
+    } catch (error) {
+      logger.error('failed to queue span:', error);
+    }
+  }
+
+  /**
      * Attempts to add a span to the buffer.
      * Tracks and logs dropped spans if the buffer is full.
      * 
      * @param span - The span to add to the buffer
      */
-    private addToBuffer(span: ReadableSpan): void {
-        const added = this.buffer.push(span);
-        if (!added) {
-            this.droppedSpansCount++;
-            if (this.droppedSpansCount === 1 || this.droppedSpansCount % 100 === 0) {
-                diag.warn(`Dropping spans: ${this.droppedSpansCount} spans dropped because buffer is full`);
-            }
-            return;
-        }
-
-        if (this.droppedSpansCount > 0) {
-            diag.warn(`Recovered from dropping spans: ${this.droppedSpansCount} spans were dropped`);
-            this.droppedSpansCount = 0;
-        }
+  private addToBuffer(span: ReadableSpan): void {
+    const added = this.buffer.push(span);
+    if (!added) {
+      this.droppedSpansCount++;
+      if (this.droppedSpansCount === 1 || this.droppedSpansCount % 100 === 0) {
+        logger.warn(`Dropping spans: ${this.droppedSpansCount} spans dropped because buffer is full`);
+      }
+      return;
     }
 
-    private async flush(): Promise<void> {
-        if (this.buffer.size === 0) {
-            diag.debug('no spans to flush');
-            return;
-        }
+    if (this.droppedSpansCount > 0) {
+      logger.warn(`Recovered from dropping spans: ${this.droppedSpansCount} spans were dropped`);
+      this.droppedSpansCount = 0;
+    }
+  }
 
-        // Use a recursive pattern with setImmediate to ensure each batch processing
-        // occurs in its own event loop tick. This prevents event loop blocking by:
-        // 1. Processing one batch at a time
-        // 2. Yielding to the event loop between batches via setImmediate
-        // 3. Allowing other operations to interleave between batch processing
-        return new Promise<void>((resolve, reject) => {
-            const processNextBatch = () => {
-                // Get next batch using configured batch size
-                const spansToExport = this.buffer.drainBatch(this.maxExportBatchSize);
+  private async flush(): Promise<void> {
+    if (this.buffer.size === 0) {
+      logger.debug('no spans to flush');
+      return;
+    }
+
+    // Use a recursive pattern with setImmediate to ensure each batch processing
+    // occurs in its own event loop tick. This prevents event loop blocking by:
+    // 1. Processing one batch at a time
+    // 2. Yielding to the event loop between batches via setImmediate
+    // 3. Allowing other operations to interleave between batch processing
+    return new Promise<void>((resolve, reject) => {
+      const processNextBatch = () => {
+        // Get next batch using configured batch size
+        const spansToExport = this.buffer.drainBatch(this.maxExportBatchSize);
                 
-                if (spansToExport.length === 0) {
-                    resolve();
-                    return;
-                }
+        if (spansToExport.length === 0) {
+          resolve();
+          return;
+        }
 
-                // Export without additional Promise wrapping
-                this.exporter.export(spansToExport, (result: ExportResult) => {
-                    if (result.code === 0) {
-                        // Schedule next batch in a new event loop tick
-                        setImmediate(processNextBatch);
-                    } else {
-                        reject(result.error || new Error('Failed to export spans'));
-                    }
-                });
-            };
-
-            // Start processing
-            processNextBatch();
+        // Export without additional Promise wrapping
+        this.exporter.export(spansToExport, (result: ExportResult) => {
+          if (result.code === 0) {
+            // Schedule next batch in a new event loop tick
+            setImmediate(processNextBatch);
+          } else {
+            reject(result.error || new Error('Failed to export spans'));
+          }
         });
-    }
+      };
 
-    /**
+      // Start processing
+      processNextBatch();
+    });
+  }
+
+  /**
      * Shuts down the processor and flushes any remaining spans.
      * After shutdown, no new spans will be accepted.
      * 
      * @returns Promise that resolves when shutdown is complete
      */
-    async shutdown(): Promise<void> {
-        this.isShutdown = true;
-        await this.flush();
-        await this.exporter.shutdown();
-    }
+  async shutdown(): Promise<void> {
+    this.isShutdown = true;
+    await this.flush();
+    await this.exporter.shutdown();
+  }
 } 

@@ -6,17 +6,18 @@ This module provides the traced_handler context manager for instrumenting Lambda
 
 import logging
 import os
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import Any, Callable
+from typing import Any
 
 from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.propagate import extract
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.trace import SpanKind, Status, StatusCode
+from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 
-from . import ProcessorMode
-from .extension import _handler_complete, _handler_ready, debug_timing
+from . import ProcessorMode, processor_mode
+from .extension import handler_complete_event
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -24,14 +25,13 @@ logger.setLevel(os.getenv("AWS_LAMBDA_LOG_LEVEL", os.getenv("LOG_LEVEL", "INFO")
 
 # Global state
 _is_cold_start: bool = True
-_processor_mode: ProcessorMode = ProcessorMode.from_env(
-    "LAMBDA_EXTENSION_SPAN_PROCESSOR_MODE", ProcessorMode.ASYNC
-)
 
 
-def _extract_span_attributes(event: dict[str, Any] | None = None, context: Any | None = None) -> dict[str, Any]:
+def _extract_span_attributes(
+    event: dict[str, Any] | None = None,
+    context: Any | None = None,
+) -> dict[str, Any]:
     """Extract span attributes from Lambda event.
-    
     Only extracts attributes that are specific to the span and not already
     set at the resource level by the init telemetry.
 
@@ -42,7 +42,7 @@ def _extract_span_attributes(event: dict[str, Any] | None = None, context: Any |
     Returns:
         Dictionary of span attributes
     """
-    attributes: dict[str, Any] = {'faas.trigger': 'other'}
+    attributes: dict[str, Any] = {"faas.trigger": "other"}
 
     # Add invocation ID, cloud resource ID and account ID if context is available
     if context:
@@ -63,11 +63,13 @@ def _extract_span_attributes(event: dict[str, Any] | None = None, context: Any |
                 attributes["http.route"] = event.get("routeKey", "")
                 if "requestContext" in event:
                     ctx = event["requestContext"]
-                    attributes.update({
-                        "http.method": ctx.get("http", {}).get("method", ""),
-                        "http.target": ctx.get("http", {}).get("path", ""),
-                        "http.scheme": ctx.get("http", {}).get("protocol", "").lower(),
-                    })
+                    attributes.update(
+                        {
+                            "http.method": ctx.get("http", {}).get("method", ""),
+                            "http.target": ctx.get("http", {}).get("path", ""),
+                            "http.scheme": ctx.get("http", {}).get("protocol", "").lower(),
+                        }
+                    )
             else:
                 attributes["http.route"] = event.get("resource", "")
                 attributes["http.method"] = event.get("httpMethod", "")
@@ -83,7 +85,7 @@ def _extract_context(
     get_carrier: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> Context | None:
     """Extract trace context from event.
-    
+
     Args:
         event: Lambda event dictionary
         get_carrier: Optional function to extract carrier from event
@@ -98,14 +100,15 @@ def _extract_context(
     if get_carrier:
         try:
             carrier = get_carrier(event)
-            if carrier:
+            if carrier and len(carrier) > 0:
                 return extract(carrier)
+            return None
         except Exception as ex:
             logger.warning("Failed to extract carrier: %s", ex)
             return None
 
     # Default extraction from headers
-    if "headers" in event:
+    if "headers" in event and len(event["headers"]) > 0:
         try:
             return extract(event["headers"])
         except Exception as ex:
@@ -131,7 +134,7 @@ def traced_handler(
     end_on_exit: bool = True,
     parent_context: Context | None = None,
     get_carrier: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
-):
+) -> Generator[Span, None, None]:
     """Context manager for tracing Lambda handlers.
 
     Example:
@@ -164,11 +167,6 @@ def traced_handler(
     global _is_cold_start
     result = None
     try:
-        # Only wait for handler ready in async mode
-        if _processor_mode == ProcessorMode.ASYNC:
-            _handler_ready.wait()
-            _handler_ready.clear()
-
         # Extract span attributes and merge with custom attributes
         span_attributes = _extract_span_attributes(event, context)
         if attributes:
@@ -192,7 +190,7 @@ def traced_handler(
             if _is_cold_start:
                 span.set_attribute("faas.cold_start", True)
                 _is_cold_start = False
-            result = yield
+            yield span  # Yield the actual span to the caller
             # Set HTTP status code if available
             if isinstance(result, dict) and "statusCode" in result:
                 status_code = result["statusCode"]
@@ -201,11 +199,10 @@ def traced_handler(
                 if status_code >= 500:
                     span.set_status(Status(StatusCode.ERROR))
     finally:
-        if _processor_mode == ProcessorMode.SYNC:
+        if processor_mode == ProcessorMode.SYNC:
             # In sync mode, force flush before returning
-            with debug_timing(logger, "force_flush call"):
-                tracer_provider.force_flush()
-        elif _processor_mode == ProcessorMode.ASYNC:
+            tracer_provider.force_flush()
+        elif processor_mode == ProcessorMode.ASYNC:
             # In async mode, signal completion to extension
-            _handler_complete.set()
-        # In finalize mode, do nothing - let the processor handle flushing 
+            handler_complete_event.set()
+        # In finalize mode, do nothing - let the processor handle flushing

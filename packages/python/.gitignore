@@ -21,3 +21,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.coverage
+.mypy_cache
+.ruff_cache
+.venv

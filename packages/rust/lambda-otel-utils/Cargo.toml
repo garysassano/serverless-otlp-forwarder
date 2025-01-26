@@ -23,11 +23,8 @@ opentelemetry-otlp.workspace = true
 opentelemetry-http.workspace = true
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
-aws_lambda_events.workspace = true
 lambda_runtime.workspace = true
-http.workspace = true
 otlp-stdout-client.workspace = true
-otlp-sigv4-client.workspace = true
 thiserror.workspace = true
 pin-project = "1.1.0"
 opentelemetry-aws = { version = "0.15.0", features = ["detector-aws-lambda"] }
@@ -40,3 +37,4 @@ sealed_test = "1.1.0"
 doc-comment = "0.3"
 serde_json.workspace = true
 reqwest.workspace = true
+aws_lambda_events.workspace = true

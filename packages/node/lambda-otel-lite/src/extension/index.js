@@ -1,7 +1,7 @@
 import { ProcessorMode, processorModeFromEnv } from '../types';
 import { state } from '../state';
 import * as http from 'http';
-import logger from './logger';
+import logger from '../logger';
 
 
 /**
@@ -30,15 +30,6 @@ function syncHttpRequest(options, data) {
 }
 
 /**
- * Track flush counter and threshold
- * @type {number}
- */
-let _flushCounter = 0;
-const _flushThreshold = parseInt(process.env.LAMBDA_EXTENSION_SPAN_PROCESSOR_FREQUENCY || '1', 10);
-
-
-
-/**
  * Request the next event from the Lambda Extensions API
  * @param {string} extensionId - The extension ID
  */
@@ -46,7 +37,7 @@ async function requestNextEvent(extensionId) {
     const nextUrl = `http://${process.env.AWS_LAMBDA_RUNTIME_API}/2020-01-01/extension/event/next`;
 
     try {
-        logger.debug('extension requesting next event');
+        logger.debug('[extension] requesting next event');
         const response = await fetch(nextUrl, {
             method: 'GET',
             headers: {
@@ -56,10 +47,10 @@ async function requestNextEvent(extensionId) {
         // Always consume the response buffer
         await response.arrayBuffer();
         if (response.status !== 200) {
-            logger.warn(`unexpected status from next event request: ${response.status}`);
+            logger.warn(`[extension] unexpected status from next event request: ${response.status}`);
         }
     } catch (error) {
-        logger.error('error requesting next event:', error);
+        logger.error(`[extension] error requesting next event:`, error);
     }
 }
 
@@ -72,7 +63,7 @@ async function shutdownTelemetry() {
         return;
     }
 
-    logger.debug('SIGTERM received, flushing traces and shutting down');
+    logger.debug('[extension] SIGTERM received, flushing traces and shutting down');
     await state.provider.forceFlush();
     await state.provider.shutdown();
     process.exit(0);
@@ -84,19 +75,16 @@ async function initializeInternalExtension() {
     const processorMode = processorModeFromEnv();
     // Get processor mode from env vars
     state.mode = processorMode;
-    logger.debug(`processor mode: ${processorMode}`);
+    logger.debug(`[extension] processor mode: ${processorMode}`);
 
     // Only initialize extension for async and finalize modes
     if (state.mode === ProcessorMode.Sync) {
-        logger.debug('skipping extension initialization in sync mode');
+        logger.debug('[extension] skipping extension initialization in sync mode');
         return false;
     }
 
     // Only async and finalize modes from this point on
     try {
-        // Register SIGTERM handler
-        process.on('SIGTERM', shutdownTelemetry);
-        logger.debug('registered SIGTERM handler');
 
         const events = processorMode === ProcessorMode.Async ? ['INVOKE'] : [];
 
@@ -114,43 +102,52 @@ async function initializeInternalExtension() {
             }
         }, JSON.stringify({ events }));
 
-        logger.debug(`extension registration response status: ${response.status}`);
-
-        const extensionId = response.headers['lambda-extension-identifier'];
+        const extensionId = String(response.headers['lambda-extension-identifier']);
         if (!extensionId) {
             throw new Error(`Failed to get extension ID from registration. Status: ${response.status}, Body: ${response.body}`);
         }
-        logger.debug(`internal extension '${extensionId}' registered for mode: ${state.mode}`);
+        logger.debug(`[extension] registered for mode: ${state.mode}`);
 
-        // Start extension loop if in async mode
+        // Register SIGTERM handler
+        process.on('SIGTERM', shutdownTelemetry);
+
         if (processorMode === ProcessorMode.Async) {
+            // Set up handler complete listener before making any requests
             state.handlerComplete.on(async () => {
-                logger.debug('handler complete event received');
-                try {
-                    if (state.provider && state.provider.forceFlush) {
-                        // Increment flush counter
-                        _flushCounter++;
-                        // Flush when counter reaches threshold
-                        if (_flushCounter >= _flushThreshold) {
-                            // Add a small delay with setTimeout to allow runtime's /next request
-                            await new Promise(resolve => setTimeout(resolve, 5));
-                            await state.provider.forceFlush();
-                            _flushCounter = 0;
-                        }
-                    }
-                } finally {
-                    // Request next event after handling is complete
-                    await requestNextEvent(extensionId.toString());
+                // Handle span flushing first
+                if (state.provider && state.provider.forceFlush) {
+                    // This small delay is crucial for accurate extension overhead measurement.
+                    // Lambda measures extension overhead as the time between:
+                    // T1: When the handler posts its response to the invoke endpoint
+                    // T2: When the extension makes its next GET request to /next
+                    // Without this delay, we might start flushing before the runtime records T1,
+                    // leading to inaccurate overhead measurements.
+                    await new Promise(resolve => setTimeout(resolve, 5));
+                    await state.provider.forceFlush();
                 }
-            });                   
-            // Request first event to start the chain
-            await requestNextEvent(extensionId.toString());
-            logger.debug('received first event');
-            return true;
-        } 
+                
+                await requestNextEvent(extensionId);
+            });
+
+            // Wait for Lambda initialization to complete
+            // Since the extension is loaded via --require, it starts before the main Lambda handler.
+            // We use the provider (set during initTelemetry()) as a signal that the Lambda initialization
+            // is complete and the runtime is ready to process events.
+            // This ensures proper sequencing of initialization and event processing.
+            while (!state.provider) {
+                await new Promise(resolve => setTimeout(resolve, 1));
+            }
+            logger.debug('[extension] initialized');
+
+            // Initial event request to start the chain in async mode
+            await requestNextEvent(extensionId);
+        } else if (processorMode === ProcessorMode.Finalize) {
+            // since we haven't registered events to be processed, this will just wait for SIGTERM
+            await requestNextEvent(extensionId);
+        }
         return true;
     } catch (error) {
-        logger.error('failed to initialize extension:', error);
+        logger.error(`[extension] failed to initialize extension:`, error);
         return false;
     }
 }
@@ -163,7 +160,7 @@ if (process.env.AWS_LAMBDA_RUNTIME_API) {
         try {
             state.extensionInitialized = await initializeInternalExtension();
         } catch (error) {
-            logger.error('failed to initialize extension:', error);
+            logger.error(`[extension] failed to initialize extension:`, error);
             state.extensionInitialized = false;
         }
     })();

@@ -25,9 +25,8 @@ http.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
 tracing.workspace = true
-base64 = "0.21.7"
+base64 = "0.22.1"
 flate2 = "1.0.28"
 bytes = "1.5.0"
 
