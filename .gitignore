@@ -20,6 +20,7 @@ target/
 # SAM specific files and directories
 .sam-outputs/
 .sam-build/
+samconfig.toml
 
 # AWS Lambda specific files and directories
 .aws-sam/
