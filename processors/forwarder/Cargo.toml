@@ -10,10 +10,6 @@ rust-version.workspace = true
 name = "log_processor"
 path = "src/log_processor.rs"
 
-[[bin]]
-name = "span_processor"
-path = "src/span_processor.rs"
-
 [dependencies]
 tokio.workspace = true
 serde_json.workspace = true
@@ -25,7 +21,6 @@ reqwest.workspace = true
 aws-config.workspace = true
 serde.workspace = true
 lambda_runtime.workspace = true
-aws-smithy-runtime-api.workspace = true
 otlp-stdout-client.workspace = true
 otlp-sigv4-client.workspace = true
 lambda-otel-utils.workspace = true
@@ -34,10 +29,11 @@ aws-credential-types = "1.1.4"
 url = "2.5.3"
 base64 = "0.22.1"
 flate2 = "1.0"
-aws_lambda_events = { version = "0.15.1", features = ["cloudwatch_logs"], default-features = false }
+aws_lambda_events = { version = "0.16.0", features = ["cloudwatch_logs", "kinesis"], default-features = false }
 regex = "1.11.1"
 
 [dev-dependencies]
 wiremock = "0.6"
 mockito = "1.2"
+chrono = "0.4.39"
 tokio = { version = "1.0", features = ["full"] }
