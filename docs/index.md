@@ -6,7 +6,7 @@ permalink: /
 ---
 
 # Serverless OTLP Forwarder
-{: .fs-9 }
+{: .no_toc .fs-9 }
 
 A serverless solution for forwarding OpenTelemetry data from AWS Lambda functions to collectors with minimal overhead.
 {: .fs-6 .fw-300 .text-grey-dk-000 }
@@ -19,8 +19,16 @@ A serverless solution for forwarding OpenTelemetry data from AWS Lambda function
 {: .warning }
 > This project is under active development. APIs and features may change.
 
+
 ![Architecture Diagram](https://github.com/user-attachments/assets/961999d9-bb69-4ba7-92a2-9efef3909b74)
 {: .architecture-diagram }
+
+## Table of Contents
+{: .no_toc .text-delta }
+- TOC
+{:toc}
+
+
 ## Documentation
 {: .text-delta }
 

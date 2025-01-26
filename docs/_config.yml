@@ -13,10 +13,10 @@ last_edit_timestamp: true
 last_edit_time_format: "%b %e %Y at %I:%M %p"
 
 # Theme
-color_scheme: theme
+color_scheme: light
 color_schemes:
   - light
-  - theme
+  - dark
   - monochrome
 
 # Breadcrumbs settings
@@ -24,6 +24,8 @@ breadcrumb_home_label: 'Home'
 breadcrumb_separator: '/'
 enable_breadcrumbs: true
 
+enable_copy_code_button: false
+  
 # Google Fonts
 google_fonts:
   - url: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap'

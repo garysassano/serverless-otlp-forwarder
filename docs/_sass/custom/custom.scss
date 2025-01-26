@@ -13,6 +13,20 @@ html {
   transition: color 0.2s ease-in-out, background-color 0.2s ease-in-out;
 }
 
+// Chart heading styles
+.main-content {
+  h3.chart-title {
+    font-size: $font-size-7 !important;
+    margin-top: 4rem;
+    margin-bottom: 1rem;
+    font-weight: $font-weight-semibold;
+    text-align: right;
+    border-bottom: 1px solid $border-color;
+    padding-top: 0.4rem;
+    padding-bottom: 0.3rem;
+  }
+}
+
 // Theme-specific overrides
 [data-theme="light"] {
   --link-color-rgb: 9, 105, 218;
@@ -42,23 +56,169 @@ html {
   // Improve contrast for code blocks
   div.highlighter-rouge pre.highlight,
   figure.highlight pre.highlight {
-    background-color: #1a1a1a;
-    border: 1px solid #ffffff;
+    background-color: $code-background-color;
+    border: 1px solid $border-color;
   }
   
   // Improve contrast for tables
   table {
     th, td {
-      border: 1px solid #ffffff;
+      border: 1px solid $border-color;
     }
   }
   
   // Improve contrast for buttons
   .btn {
-    border: 1px solid #ffffff;
+    border: 1px solid $border-color;
     &:hover {
-      background-color: #ffffff;
-      color: #000000;
+      background-color: $body-text-color;
+      color: $body-background-color;
     }
   }
-} 
+}
+
+// Benchmark configuration styles
+.benchmark-config {
+  margin: 1.5rem 0;
+
+  h2 {
+    font-size: $font-size-4;
+    margin-top: 0;
+    margin-bottom: 1rem;
+    font-weight: $font-weight-semibold;
+  }
+
+  .config-grid {
+
+    .config-item {
+      display: flex;
+      align-items: baseline;
+      
+      .config-label {
+        color: $nav-child-link-color;
+        font-size: $font-size-4;
+        margin-right: 0.5rem;
+        white-space: nowrap;
+      }
+      
+      .config-value {
+        color: $body-text-color;
+        font-family: $mono-font-family;
+        font-size: $font-size-4;
+        padding: 0.1rem 0.4rem;
+        border-radius: 4px;
+      }
+    }
+  }
+}
+
+.chart-container {
+  width: 100%;
+  height: 700px;
+}
+
+
+// Remove top margin from warning, note, info, important, caution, danger, success, and tip paragraphs
+.warning p,
+.note p,
+.info p,
+.important p,
+.caution p,
+.danger p,
+.success p,
+.tip p {
+  margin-top: 0;
+}
+
+// code block font size
+pre code {
+  font-size: $font-size-4;
+}
+
+// Code block container
+.highlight {
+    position: relative;
+}
+
+// Copy button styles
+.copy-code-button {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    width: 2rem;
+    height: 2rem;
+    padding: 0.4rem;
+    background-color: rgba($base-button-color, 0.1);
+    border: 1px solid rgba($border-color, 0.2);
+    border-radius: 4px;
+    color: $body-text-color;
+    opacity: 0;
+    transition: all 0.2s ease;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    
+    &::before {
+        content: "";
+        width: 1rem;
+        height: 1rem;
+        background-color: currentColor;
+        -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='9' y='9' width='13' height='13' rx='2' ry='2'%3E%3C/rect%3E%3Cpath d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1'%3E%3C/path%3E%3C/svg%3E");
+        mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='9' y='9' width='13' height='13' rx='2' ry='2'%3E%3C/rect%3E%3Cpath d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1'%3E%3C/path%3E%3C/svg%3E");
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+    }
+    
+    &:hover {
+        background-color: rgba($base-button-color, 0.2);
+        transform: scale(1.05);
+    }
+    
+    &:active {
+        transform: scale(0.95);
+    }
+    
+    &.copied::before {
+        -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'%3E%3C/polyline%3E%3C/svg%3E");
+        mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'%3E%3C/polyline%3E%3C/svg%3E");
+        color: $btn-primary-color;
+    }
+}
+
+// Show copy button on hover
+.highlight:hover .copy-code-button {
+    opacity: 1;
+}
+
+.download-data {
+  margin: 1rem 0;
+  text-align: right;
+
+  .btn {
+    display: inline-block;
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    line-height: 1.5;
+    text-align: center;
+    text-decoration: none;
+    border-radius: 0.25rem;
+    transition: color 0.15s ease-in-out, background-color 0.15s ease-in-out, border-color 0.15s ease-in-out;
+  }
+
+  .btn-blue {
+    color: #fff;
+    background-color: #0366d6;
+    border: 1px solid #0366d6;
+
+    &:hover {
+      background-color: #0250a4;
+      border-color: #0250a4;
+    }
+  }
+}
