@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2025-02-15
+
+### Added
+- Package metadata improvements:
+  - Added `engines` field specifying Node.js version requirement
+  - Added comprehensive publishing checklist
+  - Added package.json linting configuration
+- Example package improvements:
+  - Added proper package metadata
+  - Added correct dependency versions
+  - Added build and start scripts
+
+### Fixed
+- Fixed dependency version formats to use caret (^) instead of tilde (~)
+- Fixed scripts ordering in package.json
+- Added missing license and repository information
+
+## [0.6.0] - 2025-02-15
+
+### Breaking Changes
+- Complete overhaul of the handler interface:
+  - Removed direct tracer/provider parameters from `TracedHandlerOptions`
+  - Introduced `completionHandler` from `initTelemetry` as the main configuration point
+  - Changed function signature to `tracedHandler(options, event, context, fn)`
+  - Removed legacy interface with `fn` in options object
+- Moved all span configuration to extractors:
+  - Moved `links` from handler options to extractor attributes
+  - Removed `startTime` parameter
+  - Removed `parentContext` parameter (now handled via carrier in extractors)
+  - Changed span name precedence: extractor's `spanName` takes priority over handler's `name`
+- Simplified attribute extraction:
+  - Removed built-in HTTP attribute extraction from handler
+  - All attribute extraction now happens through extractors
+  - Removed `getCarrier` option (now part of extractor interface)
+- Restructured project layout:
+  - Moved internal modules to `internal` directory
+  - Removed `telemetry` directory
+  - Consolidated types into respective modules
+
+### Added
+- New attribute extractor interface with comprehensive documentation
+- Built-in extractors for common AWS event types:
+  - API Gateway v1/v2
+  - Application Load Balancer (ALB)
+- Type definitions for AWS Lambda events
+- Improved TypeScript type safety throughout
+
+### Changed
+- Improved logging with more specific prefix `[lambda-otel-lite]` instead of `[runtime]`
+- Better error handling and logging in extension
+- Simplified extension initialization
+- Improved documentation and examples
+- Better alignment with Rust implementation
+
+### Fixed
+- Documentation improvements and corrections
+- More consistent error handling
+- Better type safety in internal APIs
+
 ## [0.5.0] - 2025-01-18
 
 ### Added
@@ -56,7 +115,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Extension initialization and event handling sequence
 - Removed unused `processDetectorSync` from resource detectors
 
-## [0.1.1] - 2024-01-05
+## [0.1.1] - 2025-01-05
 
 ### Fixed
 - Aligned `faas.trigger` attribute behavior with Python implementation:
@@ -64,7 +123,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Simplified HTTP request detection logic
   - Fixed attribute setting order
 
-## [0.1.0] - 2024-01-05
+## [0.1.0] - 2025-01-05
 
 ### Added
 - Initial release with basic Lambda instrumentation support
