@@ -5,52 +5,57 @@
  * It creates spans for each invocation and logs the event payload using span events.
  */
 
-const { initTelemetry, tracedHandler, apiGatewayV2Extractor } = require('@dev7a/lambda-otel-lite');
-const { trace } = require('@opentelemetry/api');
+const { initTelemetry, createTracedHandler, apiGatewayV2Extractor } = require('@dev7a/lambda-otel-lite');
 
 // Initialize telemetry once at module load
-const completionHandler = initTelemetry('hello-world');
+const { tracer, completionHandler } = initTelemetry();
 
 /**
  * Simple nested function that creates its own span.
  * 
- * This function is used to demonstrate the nested span functionality of OpenTelemetry.
+ * This function demonstrates how to create a child span from the current context.
+ * The span will automatically become a child of the currently active span.
  */
 async function nestedFunction() {
-  return trace.getTracer('hello-world').startActiveSpan('nested_function', async (span) => {
-    span.addEvent('Nested function called');
-    span.end();
+  // Create a child span - it will automatically use the active span as parent
+  return tracer.startActiveSpan('nested_function', (span) => {
+    try {
+      span.addEvent('Nested function called');
+      // Your nested function logic here
+      const result = 'success';
+      if (Math.random() < 0.5) {
+        throw new Error('test error');
+      }
+      return result;
+    } finally {
+      span.end();
+    }
   });
 }
 
+// Create a traced handler with configuration
+const handler = createTracedHandler(completionHandler, {
+  name: 'simple-handler',
+  attributesExtractor: apiGatewayV2Extractor
+});
+
 // Export the Lambda handler
-exports.handler = async (event, context) => {
-  return tracedHandler(
-    {
-      completionHandler,
-      name: 'simple-handler',
-      attributesExtractor: apiGatewayV2Extractor
-    },
-    event,
-    context,
-    async (span) => {
-      const requestId = context.awsRequestId;
-      span.addEvent('handling request', {
-        'request.id': requestId
-      });
+exports.handler = handler(async (event, context, span) => {
+  const requestId = context.awsRequestId;
+  span.addEvent('handling request', {
+    'request.id': requestId
+  });
 
-      // Add custom span attributes
-      span.setAttribute('request.id', requestId);
+  // Add custom span attributes
+  span.setAttribute('request.id', requestId);
 
-      await nestedFunction();
+  await nestedFunction();
 
-      // Return a simple response
-      return {
-        statusCode: 200,
-        body: JSON.stringify({
-          message: `Hello from request ${requestId}`
-        })
-      };
-    }
-  );
-};
+  // Return a simple response
+  return {
+    statusCode: 200,
+    body: JSON.stringify({
+      message: `Hello from request ${requestId}`
+    })
+  };
+});

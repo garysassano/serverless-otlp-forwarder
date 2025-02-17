@@ -1,6 +1,7 @@
 import { Tracer } from '@opentelemetry/api';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { ProcessorMode } from '../../mode';
+import { VERSION } from '../../version';
 import { state } from '../state';
 import logger from '../logger';
 
@@ -51,10 +52,18 @@ import logger from '../logger';
  * - The handler is designed to be reused across invocations
  */
 export class TelemetryCompletionHandler {
+  private readonly _tracer: Tracer;
+
   constructor(
     private readonly provider: NodeTracerProvider,
     private readonly mode: ProcessorMode
-  ) { }
+  ) {
+    // Initialize tracer once at construction
+    this._tracer = this.provider.getTracer(
+      VERSION.NAME,
+      VERSION.VERSION
+    );
+  }
 
   /**
    * Complete telemetry processing for the current invocation.
@@ -109,33 +118,13 @@ export class TelemetryCompletionHandler {
   }
 
   /**
-   * Get a tracer instance for creating spans.
+   * Get the tracer instance for creating spans.
    * 
-   * Returns a tracer instance that can be used to create spans. The tracer is configured
-   * with the provider's settings and will automatically use the correct span processor
-   * based on the processing mode.
-   * 
-   * @param name - Name to identify the tracer. This should be descriptive and unique
-   *               within your service (e.g., 'payment-processor', 'user-api').
-   * @returns A tracer instance for creating spans
-   * 
-   * @example
-   * ```typescript
-   * const tracer = completionHandler.getTracer('payment-service');
-   * const span = tracer.startSpan('process-payment');
-   * try {
-   *   // Process payment
-   *   span.setStatus({ code: SpanStatusCode.OK });
-   * } catch (error) {
-   *   span.recordException(error);
-   *   span.setStatus({ code: SpanStatusCode.ERROR });
-   *   throw error;
-   * } finally {
-   *   span.end();
-   * }
-   * ```
+   * Returns the cached tracer instance configured with this package's instrumentation scope.
+   * The tracer is configured with the provider's settings and will automatically use 
+   * the correct span processor based on the processing mode.
    */
-  getTracer(name: string): Tracer {
-    return this.provider.getTracer(name);
+  getTracer(): Tracer {
+    return this._tracer;
   }
 } 
