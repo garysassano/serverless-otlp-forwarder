@@ -31,7 +31,7 @@ Before publishing a new version of `lambda_otel_lite`, ensure all these items ar
 - [ ] All tests pass (`pytest`)
 - [ ] Test coverage is satisfactory (`pytest --cov`)
 - [ ] Type checking passes (`mypy`)
-- [ ] Linting passes (`ruff check` and `ruff format`)
+- [ ] Linting passes (`ruff check --isolated src/lambda_otel_lite tests` and `ruff format --check --isolated src/lambda_otel_lite tests`)
 - [ ] No debug code or print statements (except in logger)
 - [ ] All public APIs are properly typed
 - [ ] All docstrings are complete and up-to-date
@@ -45,20 +45,21 @@ Before publishing a new version of `lambda_otel_lite`, ensure all these items ar
 
 ## Publishing Steps
 1. Update version in `pyproject.toml`
-2. Update `CHANGELOG.md`
-3. Run quality checks:
+2. Update version in `src/lambda_otel_lite/__init__.py`
+3. Update `CHANGELOG.md`
+4. Run quality checks:
    ```bash
    pytest
    mypy src/lambda_otel_lite
    ruff check
    ruff format
    ```
-4. Clean build:
+5. Clean build:
    ```bash
    rm -rf dist/ build/ *.egg-info/
    python -m build
    ```
-5. Test the build:
+6. Test the build:
    ```bash
    python -m venv test_venv
    source test_venv/bin/activate
@@ -67,17 +68,17 @@ Before publishing a new version of `lambda_otel_lite`, ensure all these items ar
    deactivate
    rm -rf test_venv
    ```
-6. Commit changes:
+7. Commit changes:
    ```bash
    git commit -am "Release vX.Y.Z"
    git tag vX.Y.Z
    git push && git push --tags
    ```
-7. Publish to PyPI:
+8. Publish to PyPI:
    ```bash
    python -m twine upload dist/*
    ```
-8. Verify package on PyPI: https://pypi.org/project/lambda-otel-lite/
+9. Verify package on PyPI: https://pypi.org/project/lambda-otel-lite/
 
 ## Post-Publishing
 - [ ] Verify package installation works: `pip install lambda_otel_lite`
