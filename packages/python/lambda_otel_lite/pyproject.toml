@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=45"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "lambda_otel_lite"
-version = "0.5.1"
+version = "0.8.0"
 description = "Lightweight OpenTelemetry instrumentation for AWS Lambda"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -20,31 +24,24 @@ classifiers = [
 dependencies = [
     "opentelemetry-api>=1.29.0",
     "opentelemetry-sdk>=1.29.0",
-    "opentelemetry-exporter-otlp-proto-http==1.29.0",
-    "urllib3>=2.0.0",
     "otlp-stdout-span-exporter>=0.1.2",
 ]
 
 [project.urls]
-Homepage = "https://github.com/dev7a/serverless-otlp-forwarder/tree/main/packages/python/lambda_otel_lite"
+Homepage = "https://github.com/dev7a/serverless-otlp-forwarder"
 Repository = "https://github.com/dev7a/serverless-otlp-forwarder/tree/main/packages/python/lambda_otel_lite"
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4.0",
-    "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.1.0",
     "ruff>=0.1.0",
     "mypy>=1.7.0",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build]
-only-packages = true
-sources = ["src"]
+otlp-http = [
+    "opentelemetry-exporter-otlp-proto-http>=1.29.0",
+]
 
 [tool.ruff]
 target-version = "py312"
