@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2025-02-22
+
+### Breaking Changes
+- Simplified handler creation API by removing configuration object wrapper:
+  - Old: `createTracedHandler(name, completionHandler, { attributesExtractor })`
+  - New: `createTracedHandler(name, completionHandler, attributesExtractor)`
+- Removed `TracerConfig` interface as it's no longer needed
+
+### Changed
+- Fixed `faas.max_memory` attribute to be in bytes instead of the raw MB value
+- Ensured all numeric attributes are set as numbers instead of strings:
+  - `lambda_otel_lite.lambda_span_processor.queue_size`
+  - `lambda_otel_lite.lambda_span_processor.batch_size`
+  - `lambda_otel_lite.otlp_stdout_span_exporter.compression_level`
+- Added Prettier for code formatting:
+  - Added `.prettierrc.json` configuration
+  - Added `.prettierignore` file
+  - Added format scripts to package.json
+  - Formatted all code according to style guide
+- Updated examples to use the new direct extractor passing style
+- Improved alignment with Python and Rust implementations
+
 ## [0.8.2] - 2025-02-22
 
 ### Changed

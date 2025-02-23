@@ -17,14 +17,6 @@ export interface LambdaContext {
 }
 
 /**
- * Optional configuration for traced handler
- */
-export interface TracerConfig {
-  /** Optional attribute extractor function */
-  attributesExtractor?: (event: unknown, context: LambdaContext) => SpanAttributes;
-}
-
-/**
  * A Lambda handler function type
  */
 export type TracedFunction<TEvent, TResult> = (
@@ -35,24 +27,24 @@ export type TracedFunction<TEvent, TResult> = (
 /**
  * Creates a traced handler for AWS Lambda functions with automatic attribute extraction
  * and context propagation.
- * 
+ *
  * @example
  * ```typescript
  * const completionHandler = initTelemetry();
- * 
+ *
  * // Create a traced handler with a name and optional attribute extractor
  * const traced = createTracedHandler(
  *   'my-handler',
  *   completionHandler,
- *   { attributesExtractor: apiGatewayV2Extractor }
+ *   apiGatewayV2Extractor
  * );
- * 
+ *
  * // Use the traced handler to process Lambda events
  * export const lambdaHandler = traced(async (event, context) => {
  *   // Get current span if needed
  *   const currentSpan = trace.getActiveSpan();
  *   currentSpan?.setAttribute('custom.attribute', 'value');
- *   
+ *
  *   // Your handler logic here
  *   return {
  *     statusCode: 200,
@@ -64,7 +56,7 @@ export type TracedFunction<TEvent, TResult> = (
 export function createTracedHandler(
   name: string,
   completionHandler: TelemetryCompletionHandler,
-  config?: TracerConfig
+  attributesExtractor?: (event: unknown, context: LambdaContext) => SpanAttributes
 ) {
   return function <TEvent, TResult>(fn: TracedFunction<TEvent, TResult>) {
     return async function (event: TEvent, context: LambdaContext): Promise<TResult> {
@@ -72,7 +64,7 @@ export function createTracedHandler(
 
       try {
         // Extract attributes using provided extractor or default
-        const extracted = (config?.attributesExtractor || defaultExtractor)(event, context);
+        const extracted = (attributesExtractor || defaultExtractor)(event, context);
 
         // Extract context from carrier if available
         let parentContext = ROOT_CONTEXT;
@@ -103,7 +95,7 @@ export function createTracedHandler(
               if (context) {
                 span.setAttribute('faas.invocation_id', context.awsRequestId);
                 span.setAttribute('cloud.resource_id', context.invokedFunctionArn);
-                            
+
                 const arnParts = context.invokedFunctionArn.split(':');
                 if (arnParts.length >= 5) {
                   span.setAttribute('cloud.account.id', arnParts[4]);
@@ -122,19 +114,25 @@ export function createTracedHandler(
               const result = await fn(event, context);
 
               // Handle HTTP response attributes
-              if (result && typeof result === 'object' && !Array.isArray(result) && result !== null && 'statusCode' in result) {
+              if (
+                result &&
+                typeof result === 'object' &&
+                !Array.isArray(result) &&
+                result !== null &&
+                'statusCode' in result
+              ) {
                 const statusCode = result.statusCode as number;
                 span.setAttribute('http.status_code', statusCode);
                 if (statusCode >= 500) {
                   span.setStatus({
                     code: SpanStatusCode.ERROR,
-                    message: `HTTP ${statusCode} response`
+                    message: `HTTP ${statusCode} response`,
                   });
                 } else {
                   span.setStatus({ code: SpanStatusCode.OK });
                 }
               }
-              
+
               return result;
             } catch (e) {
               // Record the error with full exception details
@@ -144,7 +142,7 @@ export function createTracedHandler(
               // Set status to ERROR
               span.setStatus({
                 code: SpanStatusCode.ERROR,
-                message: e instanceof Error ? e.message : String(e)
+                message: e instanceof Error ? e.message : String(e),
               });
               throw e;
             } finally {
@@ -162,4 +160,3 @@ export function createTracedHandler(
     };
   };
 }
-
