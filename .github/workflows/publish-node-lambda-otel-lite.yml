@@ -62,6 +62,9 @@ jobs:
     # Only run on pushes to main, never on PRs
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    environment:
+      name: npm-publish
+      url: https://www.npmjs.com/package/lambda-otel-lite
     defaults:
       run:
         working-directory: packages/node/lambda-otel-lite

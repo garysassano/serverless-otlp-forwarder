@@ -63,6 +63,9 @@ jobs:
     # Only run on pushes to main, never on PRs
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    environment:
+      name: crates-publish
+      url: https://crates.io/crates/lambda-otel-lite
     defaults:
       run:
         working-directory: packages/rust/lambda-otel-lite

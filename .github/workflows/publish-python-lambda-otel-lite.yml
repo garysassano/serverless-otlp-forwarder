@@ -65,6 +65,9 @@ jobs:
     # Only run on pushes to main, never on PRs
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    environment:
+      name: pypi-publish
+      url: https://pypi.org/project/lambda-otel-lite
     defaults:
       run:
         working-directory: packages/python/lambda_otel_lite
