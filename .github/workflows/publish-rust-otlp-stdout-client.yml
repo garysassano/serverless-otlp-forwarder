@@ -5,7 +5,7 @@ on:
   pull_request:
     paths:
       - 'packages/rust/otlp-stdout-client/**'
-    types: [opened, synchronize]
+    types: [opened, synchronize, labeled]
   # Trigger on merges to main that touch the Rust package
   push:
     branches:

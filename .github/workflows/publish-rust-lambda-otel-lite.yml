@@ -35,8 +35,8 @@ jobs:
     defaults:
       run:
         working-directory: packages/rust/lambda-otel-lite
+        
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'approved')
-
     steps:
       - uses: actions/checkout@v4
 

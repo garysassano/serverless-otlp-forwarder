@@ -5,7 +5,7 @@ on:
   pull_request:
     paths:
       - 'packages/python/lambda_otel_lite/**'
-    types: [opened, synchronize]
+    types: [opened, synchronize, labeled]
   # Trigger on merges to main that touch the Python package
   push:
     branches:
@@ -36,6 +36,7 @@ jobs:
       run:
         working-directory: packages/python/lambda_otel_lite
 
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'approved')
     steps:
       - uses: actions/checkout@v4
 
@@ -88,13 +89,17 @@ jobs:
         run: python -m build
 
       - name: Verify package version
+        id: version_check
         run: |
           PACKAGE_VERSION=$(python -c "import sys; sys.path.insert(0, 'src'); from lambda_otel_lite import __version__; print(__version__)")
-          if git tag -l | grep -q "python-v$PACKAGE_VERSION"; then
+          TAG_NAME="packages/python/lambda_otel_lite-v$PACKAGE_VERSION"
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          
+          if git tag -l | grep -q "$TAG_NAME"; then
             echo "Version $PACKAGE_VERSION already published"
             exit 1
           fi
-          echo "Publishing version $PACKAGE_VERSION"
+          echo "Publishing version $PACKAGE_VERSION with tag $TAG_NAME"
 
       - name: Publish to PyPI
         env:
@@ -104,6 +109,5 @@ jobs:
 
       - name: Create and push tag
         run: |
-          PACKAGE_VERSION=$(python -c "import sys; sys.path.insert(0, 'src'); from lambda_otel_lite import __version__; print(__version__)")
-          git tag "python-v$PACKAGE_VERSION"
-          git push origin "python-v$PACKAGE_VERSION" 
+          git tag "${{ steps.version_check.outputs.tag_name }}"
+          git push origin "${{ steps.version_check.outputs.tag_name }}" 

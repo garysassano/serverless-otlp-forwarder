@@ -5,7 +5,7 @@ on:
   pull_request:
     paths:
       - 'packages/rust/otlp-stdout-span-exporter/**'
-    types: [opened, synchronize]
+    types: [opened, synchronize, labeled]
   # Trigger on merges to main that touch the Rust package
   push:
     branches:
@@ -35,6 +35,7 @@ jobs:
     defaults:
       run:
         working-directory: packages/rust/otlp-stdout-span-exporter
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'approved')
 
     steps:
       - uses: actions/checkout@v4
@@ -84,13 +85,17 @@ jobs:
         run: cargo build --release
 
       - name: Verify package version
+        id: version_check
         run: |
-          PACKAGE_VERSION=$(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "otlp-stdout-span-exporter") | .version')
-          if git tag -l | grep -q "rust-v$PACKAGE_VERSION"; then
+          PACKAGE_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "otlp-stdout-span-exporter") | .version')
+          TAG_NAME="packages/rust/otlp-stdout-span-exporter-v$PACKAGE_VERSION"
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          
+          if git tag -l | grep -q "$TAG_NAME"; then
             echo "Version $PACKAGE_VERSION already published"
             exit 1
           fi
-          echo "Publishing version $PACKAGE_VERSION"
+          echo "Publishing version $PACKAGE_VERSION with tag $TAG_NAME"
 
       - name: Publish to crates.io
         env:
@@ -99,6 +104,5 @@ jobs:
 
       - name: Create and push tag
         run: |
-          PACKAGE_VERSION=$(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "otlp-stdout-span-exporter") | .version')
-          git tag "rust-v$PACKAGE_VERSION"
-          git push origin "rust-v$PACKAGE_VERSION" 
+          git tag "${{ steps.version_check.outputs.tag_name }}"
+          git push origin "${{ steps.version_check.outputs.tag_name }}" 

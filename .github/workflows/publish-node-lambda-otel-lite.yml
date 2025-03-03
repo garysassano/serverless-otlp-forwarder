@@ -5,7 +5,7 @@ on:
   pull_request:
     paths:
       - 'packages/node/lambda-otel-lite/**'
-    types: [opened, synchronize]
+    types: [opened, synchronize, labeled]
   # Trigger on merges to main that touch the Node.js package
   push:
     branches:
@@ -36,6 +36,7 @@ jobs:
       run:
         working-directory: packages/node/lambda-otel-lite
 
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'approved')
     steps:
       - uses: actions/checkout@v4
 
@@ -84,20 +85,23 @@ jobs:
         run: npm run build
 
       - name: Verify package version
+        id: version_check
         run: |
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
           VERSION_TS_VERSION=$(grep -o "'[0-9]\+\.[0-9]\+\.[0-9]\+'" src/version.ts | tr -d "'")
+          TAG_NAME="packages/node/lambda-otel-lite-v$PACKAGE_VERSION"
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
           
           if [ "$PACKAGE_VERSION" != "$VERSION_TS_VERSION" ]; then
             echo "Version mismatch: package.json ($PACKAGE_VERSION) != version.ts ($VERSION_TS_VERSION)"
             exit 1
           fi
           
-          if git tag -l | grep -q "node-v$PACKAGE_VERSION"; then
+          if git tag -l | grep -q "$TAG_NAME"; then
             echo "Version $PACKAGE_VERSION already published"
             exit 1
           fi
-          echo "Publishing version $PACKAGE_VERSION"
+          echo "Publishing version $PACKAGE_VERSION with tag $TAG_NAME"
 
       - name: Publish to npm
         env:
@@ -106,6 +110,5 @@ jobs:
 
       - name: Create and push tag
         run: |
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          git tag "node-v$PACKAGE_VERSION"
-          git push origin "node-v$PACKAGE_VERSION" 
+          git tag "${{ steps.version_check.outputs.tag_name }}"
+          git push origin "${{ steps.version_check.outputs.tag_name }}" 
