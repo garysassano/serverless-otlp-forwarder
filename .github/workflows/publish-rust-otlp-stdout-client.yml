@@ -1,0 +1,107 @@
+name: Publish Rust OTLP Stdout Client
+
+on:
+  # Trigger on PRs that touch the Rust package
+  pull_request:
+    paths:
+      - 'packages/rust/otlp-stdout-client/**'
+    types: [opened, synchronize]
+  # Trigger on merges to main that touch the Rust package
+  push:
+    branches:
+      - main
+    paths:
+      - 'packages/rust/otlp-stdout-client/**'
+
+# Add permissions needed for the workflow
+permissions:
+  contents: write  # Needed for pushing tags
+  id-token: write  # Needed for publishing to crates.io
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        include:
+          # x64 runner
+          - os: ubuntu-latest
+            arch: x64
+            rust-version: stable
+          # arm64 runner
+          - os: ubuntu-22.04-arm
+            arch: arm64
+            rust-version: stable
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: packages/rust/otlp-stdout-client
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'approved')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust-version }}
+          components: rustfmt, clippy
+
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+
+      - name: Run quality checks
+        run: |
+          cargo fmt --check
+          cargo clippy -- -D warnings
+          cargo test
+          cargo build --release
+
+  publish:
+    needs: test
+    # Only run on pushes to main, never on PRs
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/rust/otlp-stdout-client
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/rust/otlp-stdout-client
+
+      - name: Build package
+        run: cargo build --release
+
+      - name: Verify package version
+        id: version_check
+        run: |
+          PACKAGE_VERSION=$(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "otlp-stdout-client") | .version')
+          TAG_NAME="packages/rust/otlp-stdout-client-v$PACKAGE_VERSION"
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          
+          if git tag -l | grep -q "$TAG_NAME"; then
+            echo "Version $PACKAGE_VERSION already published"
+            exit 1
+          fi
+          echo "Publishing version $PACKAGE_VERSION with tag $TAG_NAME"
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish
+
+      - name: Create and push tag
+        run: |
+          git tag "${{ steps.version_check.outputs.tag_name }}"
+          git push origin "${{ steps.version_check.outputs.tag_name }}" 
