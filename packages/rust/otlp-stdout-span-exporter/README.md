@@ -1,4 +1,4 @@
-# OTLP Stdout Span Exporter
+# Rust OTLP Stdout Span Exporter
 
 A Rust span exporter that writes OpenTelemetry spans to stdout, using a custom serialization format that embeds the spans serialized as OTLP protobuf in the `payload` field. 
 The message envelope carries some metadata about the spans, such as the service name, the OTLP endpoint, and the HTTP method:
@@ -131,5 +131,5 @@ Apache License 2.0
 ## See Also
 
 - [serverless-otlp-forwarder](https://github.com/dev7a/serverless-otlp-forwarder) - The main project repository
-- [Python Span Exporter](https://github.com/dev7a/serverless-otlp-forwarder/tree/main/packages/python/otlp-stdout-span-exporter) - The Python version of this exporter
-- [TypeScript Span Exporter](https://github.com/dev7a/serverless-otlp-forwarder/tree/main/packages/node/otlp-stdout-span-exporter) - The TypeScript version of this exporter 
+- [Python OTLP Stdout Span Exporter](https://github.com/dev7a/serverless-otlp-forwarder/tree/main/packages/python/otlp-stdout-span-exporter) - The Python version of this exporter
+- [TypeScript OTLP Stdout Span Exporter](https://github.com/dev7a/serverless-otlp-forwarder/tree/main/packages/node/otlp-stdout-span-exporter) - The TypeScript version of this exporter 
