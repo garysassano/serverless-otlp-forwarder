@@ -16,18 +16,12 @@ async fn main() {
     // Create a tracer
     let tracer = provider.tracer("hello-world");
 
-    println!("Starting parent operation");
+    // Create spans without any println statements
     tracer.in_span("parent-operation", |_cx| {
         // Create child spans
-        tracer.in_span("child1", |_| {
-            println!("In child1");
-        });
-
-        tracer.in_span("child2", |_| {
-            println!("In child2");
-        });
+        tracer.in_span("child1", |_| {});
+        tracer.in_span("child2", |_| {});
     });
-    println!("Finishing parent operation");
 
     // Shut down the provider to ensure all spans are exported
     let _ = provider.shutdown();
