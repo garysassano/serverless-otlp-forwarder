@@ -5,16 +5,16 @@
         "attributes": [
           { "key": "service.name", "value": { "stringValue": "hello-world" } },
           {
+            "key": "telemetry.sdk.name",
+            "value": { "stringValue": "opentelemetry" }
+          },
+          {
             "key": "telemetry.sdk.version",
             "value": { "stringValue": "0.28.0" }
           },
           {
             "key": "telemetry.sdk.language",
             "value": { "stringValue": "rust" }
-          },
-          {
-            "key": "telemetry.sdk.name",
-            "value": { "stringValue": "opentelemetry" }
           }
         ],
         "droppedAttributesCount": 0
@@ -29,15 +29,15 @@
           },
           "spans": [
             {
-              "traceId": "af91e65d3a854acabcb4e15464bbbe89",
-              "spanId": "14ea3a58cde652ed",
+              "traceId": "80272cbf8765aa0ca9740b42e2a571fb",
+              "spanId": "0b8eef65cd653975",
               "traceState": "",
-              "parentSpanId": "d75b583bbb9a1a3b",
+              "parentSpanId": "b7e26990dcf46e6c",
               "flags": 1,
               "name": "child1",
               "kind": 1,
-              "startTimeUnixNano": "1741800377252232577",
-              "endTimeUnixNano": "1741800377252234224",
+              "startTimeUnixNano": "1741800808946008978",
+              "endTimeUnixNano": "1741800808946010455",
               "attributes": [],
               "droppedAttributesCount": 0,
               "events": [],
@@ -47,15 +47,15 @@
               "status": { "message": "", "code": 0 }
             },
             {
-              "traceId": "af91e65d3a854acabcb4e15464bbbe89",
-              "spanId": "005e1ced3d5482e4",
+              "traceId": "80272cbf8765aa0ca9740b42e2a571fb",
+              "spanId": "ff76242ae57f3f06",
               "traceState": "",
-              "parentSpanId": "d75b583bbb9a1a3b",
+              "parentSpanId": "b7e26990dcf46e6c",
               "flags": 1,
               "name": "child2",
               "kind": 1,
-              "startTimeUnixNano": "1741800377252236233",
-              "endTimeUnixNano": "1741800377252236775",
+              "startTimeUnixNano": "1741800808946012739",
+              "endTimeUnixNano": "1741800808946013271",
               "attributes": [],
               "droppedAttributesCount": 0,
               "events": [],
@@ -65,15 +65,15 @@
               "status": { "message": "", "code": 0 }
             },
             {
-              "traceId": "af91e65d3a854acabcb4e15464bbbe89",
-              "spanId": "d75b583bbb9a1a3b",
+              "traceId": "80272cbf8765aa0ca9740b42e2a571fb",
+              "spanId": "b7e26990dcf46e6c",
               "traceState": "",
               "parentSpanId": "",
               "flags": 1,
               "name": "parent-operation",
               "kind": 1,
-              "startTimeUnixNano": "1741800377252228815",
-              "endTimeUnixNano": "1741800377252237275",
+              "startTimeUnixNano": "1741800808946004961",
+              "endTimeUnixNano": "1741800808946013781",
               "attributes": [],
               "droppedAttributesCount": 0,
               "events": [],
