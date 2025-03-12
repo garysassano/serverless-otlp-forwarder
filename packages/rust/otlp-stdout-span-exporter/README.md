@@ -172,7 +172,3 @@ The ClickHouse format is compatible with the ClickHouse exporter schema:
   }
 ]
 ```
-
-## License
-
-This project is licensed under the terms specified in the workspace configuration. 
