@@ -7,6 +7,7 @@
 //! # Features
 //!
 //! - Outputs OTLP data directly as plain JSON
+//! - Optionally outputs in ClickHouse-compatible format
 //! - Simple, lightweight implementation
 //! - No compression or encoding overhead
 //!
@@ -87,6 +88,8 @@
 //! }
 //! ```
 
+mod clickhouse_formatter;
+
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
@@ -100,6 +103,21 @@ use opentelemetry_sdk::{
 #[cfg(test)]
 use std::sync::Mutex;
 use std::{result::Result, sync::Arc};
+
+/// Output format options for the exporter
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    /// Standard OTLP JSON format
+    OtlpJson,
+    /// ClickHouse-compatible format
+    ClickHouse,
+}
+
+impl Default for OutputFormat {
+    fn default() -> Self {
+        Self::OtlpJson
+    }
+}
 
 /// Trait for output handling
 ///
@@ -166,10 +184,13 @@ impl Output for TestOutput {
 ///
 /// ```rust,no_run
 /// use opentelemetry_sdk::runtime;
-/// use otlp_stdout_span_exporter::OtlpStdoutSpanExporter;
+/// use otlp_stdout_span_exporter::{OtlpStdoutSpanExporter, OutputFormat};
 ///
-/// // Create a new exporter
+/// // Create a new exporter with default OTLP format
 /// let exporter = OtlpStdoutSpanExporter::new();
+///
+/// // Or create with ClickHouse format
+/// let clickhouse_exporter = OtlpStdoutSpanExporter::with_format(OutputFormat::ClickHouse);
 /// ```
 #[derive(Debug)]
 pub struct OtlpStdoutSpanExporter {
@@ -177,6 +198,8 @@ pub struct OtlpStdoutSpanExporter {
     resource: Option<Resource>,
     /// Output implementation (stdout or test buffer)
     output: Arc<dyn Output>,
+    /// Output format
+    format: OutputFormat,
 }
 
 impl Default for OtlpStdoutSpanExporter {
@@ -186,7 +209,7 @@ impl Default for OtlpStdoutSpanExporter {
 }
 
 impl OtlpStdoutSpanExporter {
-    /// Creates a new exporter
+    /// Creates a new exporter with default OTLP format
     ///
     /// # Example
     ///
@@ -199,6 +222,24 @@ impl OtlpStdoutSpanExporter {
         Self {
             resource: None,
             output: Arc::new(StdOutput),
+            format: OutputFormat::OtlpJson,
+        }
+    }
+
+    /// Creates a new exporter with the specified output format
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use otlp_stdout_span_exporter::{OtlpStdoutSpanExporter, OutputFormat};
+    ///
+    /// let exporter = OtlpStdoutSpanExporter::with_format(OutputFormat::ClickHouse);
+    /// ```
+    pub fn with_format(format: OutputFormat) -> Self {
+        Self {
+            resource: None,
+            output: Arc::new(StdOutput),
+            format,
         }
     }
 
@@ -208,6 +249,18 @@ impl OtlpStdoutSpanExporter {
         let exporter = Self {
             resource: None,
             output: output.clone() as Arc<dyn Output>,
+            format: OutputFormat::OtlpJson,
+        };
+        (exporter, output)
+    }
+
+    #[cfg(test)]
+    fn with_test_output_and_format(format: OutputFormat) -> (Self, Arc<TestOutput>) {
+        let output = Arc::new(TestOutput::new());
+        let exporter = Self {
+            resource: None,
+            output: output.clone() as Arc<dyn Output>,
+            format,
         };
         (exporter, output)
     }
@@ -215,9 +268,9 @@ impl OtlpStdoutSpanExporter {
 
 #[async_trait]
 impl SpanExporter for OtlpStdoutSpanExporter {
-    /// Export spans to stdout in OTLP format as plain JSON
+    /// Export spans to stdout in the configured format
     ///
-    /// This function converts spans to OTLP format and outputs them directly as JSON.
+    /// This function converts spans to the specified format and outputs them directly as JSON.
     ///
     /// # Arguments
     ///
@@ -238,11 +291,24 @@ impl SpanExporter for OtlpStdoutSpanExporter {
             let resource_spans = group_spans_by_resource_and_scope(batch, &resource_attrs);
             let request = ExportTraceServiceRequest { resource_spans };
 
-            // Convert request to JSON and write directly
+            // Convert request to JSON
             let json_str = serde_json::to_string(&request)
                 .map_err(|e| OTelSdkError::InternalFailure(e.to_string()))?;
 
-            self.output.write_line(&json_str)?;
+            // Transform to ClickHouse format if needed
+            match self.format {
+                OutputFormat::OtlpJson => {
+                    // Write OTLP JSON directly
+                    self.output.write_line(&json_str)?;
+                }
+                OutputFormat::ClickHouse => {
+                    // Transform to ClickHouse format and write
+                    let clickhouse_json =
+                        clickhouse_formatter::transform_otlp_to_clickhouse(&json_str)
+                            .map_err(|e| OTelSdkError::InternalFailure(e.to_string()))?;
+                    self.output.write_line(&clickhouse_json)?;
+                }
+            }
 
             Ok(())
         })();
@@ -338,6 +404,35 @@ mod tests {
         // Resource spans should be an array
         let resource_spans = json.get("resourceSpans").unwrap().as_array().unwrap();
         assert!(resource_spans.len() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_export_clickhouse_format() {
+        let (mut exporter, output) =
+            OtlpStdoutSpanExporter::with_test_output_and_format(OutputFormat::ClickHouse);
+        let span = create_test_span();
+
+        let result = exporter.export(vec![span]).await;
+        assert!(result.is_ok());
+
+        let output = output.get_output();
+        assert_eq!(output.len(), 1);
+
+        // Parse and verify it's valid JSON
+        let json: Value = serde_json::from_str(&output[0]).unwrap();
+
+        // Verify it's an array of spans in ClickHouse format
+        assert!(json.is_array());
+
+        if let Some(first_span) = json.as_array().unwrap().first() {
+            // Check for ClickHouse format fields
+            assert!(first_span.get("Timestamp").is_some());
+            assert!(first_span.get("TraceId").is_some());
+            assert!(first_span.get("SpanId").is_some());
+            assert!(first_span.get("SpanName").is_some());
+            assert!(first_span.get("SpanKind").is_some());
+            assert!(first_span.get("ServiceName").is_some());
+        }
     }
 
     #[tokio::test]
