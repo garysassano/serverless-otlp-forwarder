@@ -1,0 +1,10 @@
+{
+  "__otel_otlp_stdout": "0.9.0",
+  "source": "hello-world",
+  "endpoint": "http://localhost:4318/v1/traces",
+  "method": "POST",
+  "content-type": "application/x-protobuf",
+  "content-encoding": "gzip",
+  "payload": "H4sIAAAAAAAA/23QP0vDUBQF8DyREK8WywPFQUEFQURDjA52Ebs4uDj4Z9ElNJc2+JqU99JoO3SrKCIOiqC7m+6O4qBuVqiL6AcQ6iZCXdq0hZa03S73HH7Dgf8eOCEwAUMuMkyiyzOqMPdUD7mwHJsqIGuqvqRqMAU0WLGNJNJBCDkptJsJjMNwsMYMO5424khl6OVp4cIYDAjknhXDBhGC/gQy5sztO5yZ9JtA22cNwssHpc1KrlRYKJbhL3f2S5XXfLkvsridnVTud993Lo7Xr2fkWMJi5rxGIjeZx/O30dmRaNF7vqwdWSlPiCRJ3S398Pbn6G7rocPSfWu60CCiqx+fVwFrpZvVElIG94fxBbHxcloXwk9fAaEK5RTEyX0BAAA=",
+  "base64": true
+}

@@ -11,6 +11,7 @@
 //! - Detects service name from environment variables
 //! - Supports custom headers via environment variables
 //! - Consistent JSON output format
+//! - Optional plain JSON output without compression or encoding
 //!
 //! # Example
 //!
@@ -60,7 +61,7 @@
 //!
 //! # Output Format
 //!
-//! The exporter writes each batch of spans as a JSON object to stdout:
+//! By default, the exporter writes each batch of spans as a JSON object to stdout:
 //!
 //! ```json
 //! {
@@ -78,6 +79,44 @@
 //!   "base64": true
 //! }
 //! ```
+//!
+//! When using the `with_plain_json()` constructor, the exporter outputs the OTLP data directly as JSON:
+//!
+//! ```json
+//! {
+//!   "resource_spans": [
+//!     {
+//!       "resource": {
+//!         "attributes": [
+//!           {
+//!             "key": "service.name",
+//!             "value": {
+//!               "string_value": "my-service"
+//!             }
+//!           }
+//!         ]
+//!       },
+//!       "scope_spans": [
+//!         {
+//!           "scope": {
+//!             "name": "my-library",
+//!             "version": "1.0.0"
+//!           },
+//!           "spans": [
+//!             {
+//!               "trace_id": "...",
+//!               "span_id": "...",
+//!               "name": "my-span",
+//!               "kind": "SPAN_KIND_INTERNAL",
+//!               "start_time_unix_nano": "...",
+//!               "end_time_unix_nano": "..."
+//!             }
+//!           ]
+//!         }
+//!       ]
+//!     }
+//!   ]
+//! }
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
@@ -199,6 +238,7 @@ struct ExporterOutput<'a> {
 /// - Environment variable support for service name and headers
 /// - Efficient batching of spans
 /// - Base64 encoding of compressed data
+/// - Option for plain JSON output
 ///
 /// # Example
 ///
@@ -208,6 +248,9 @@ struct ExporterOutput<'a> {
 ///
 /// // Create an exporter with maximum compression
 /// let exporter = OtlpStdoutSpanExporter::with_gzip_level(9);
+///
+/// // Or create an exporter with plain JSON output (no compression or encoding)
+/// let plain_json_exporter = OtlpStdoutSpanExporter::with_plain_json();
 /// ```
 #[derive(Debug)]
 pub struct OtlpStdoutSpanExporter {
@@ -217,6 +260,8 @@ pub struct OtlpStdoutSpanExporter {
     resource: Option<Resource>,
     /// Output implementation (stdout or test buffer)
     output: Arc<dyn Output>,
+    /// Whether to use plain JSON output instead of base64+gzip+protobuf
+    use_plain_json: bool,
 }
 
 impl Default for OtlpStdoutSpanExporter {
@@ -246,6 +291,7 @@ impl OtlpStdoutSpanExporter {
             gzip_level,
             resource: None,
             output: Arc::new(StdOutput),
+            use_plain_json: false,
         }
     }
 
@@ -271,6 +317,28 @@ impl OtlpStdoutSpanExporter {
             gzip_level,
             resource: None,
             output: Arc::new(StdOutput),
+            use_plain_json: false,
+        }
+    }
+
+    /// Creates a new exporter that outputs plain JSON
+    ///
+    /// This creates an exporter that outputs span data in plain JSON format instead
+    /// of base64-encoded, gzipped protobuf.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use otlp_stdout_span_exporter::OtlpStdoutSpanExporter;
+    ///
+    /// let exporter = OtlpStdoutSpanExporter::with_plain_json();
+    /// ```
+    pub fn with_plain_json() -> Self {
+        Self {
+            gzip_level: 0, // Not used for plain JSON
+            resource: None,
+            output: Arc::new(StdOutput),
+            use_plain_json: true,
         }
     }
 
@@ -295,6 +363,7 @@ impl OtlpStdoutSpanExporter {
             gzip_level,
             resource: None,
             output: output.clone() as Arc<dyn Output>,
+            use_plain_json: false,
         };
         (exporter, output)
     }
@@ -354,12 +423,9 @@ impl OtlpStdoutSpanExporter {
 impl SpanExporter for OtlpStdoutSpanExporter {
     /// Export spans to stdout in OTLP format
     ///
-    /// This function:
-    /// 1. Converts spans to OTLP format
-    /// 2. Serializes them to protobuf
-    /// 3. Compresses the data with GZIP
-    /// 4. Base64 encodes the result
-    /// 5. Writes a JSON object to stdout
+    /// This function either:
+    /// 1. Outputs direct JSON serialization of spans if use_plain_json is true, or
+    /// 2. Converts spans to OTLP format, serializes to protobuf, compresses, and base64 encodes
     ///
     /// # Arguments
     ///
@@ -380,39 +446,50 @@ impl SpanExporter for OtlpStdoutSpanExporter {
             let resource_spans = group_spans_by_resource_and_scope(batch, &resource_attrs);
             let request = ExportTraceServiceRequest { resource_spans };
 
-            // Serialize to protobuf
-            let proto_bytes = request.encode_to_vec();
+            // If plain JSON is enabled, output the request directly as JSON
+            if self.use_plain_json {
+                // Convert request to JSON and write directly
+                let json_str = serde_json::to_string(&request)
+                    .map_err(|e| OTelSdkError::InternalFailure(e.to_string()))?;
 
-            // Compress with GZIP
-            let mut encoder = GzEncoder::new(Vec::new(), Compression::new(self.gzip_level as u32));
-            encoder
-                .write_all(&proto_bytes)
-                .map_err(|e| OTelSdkError::InternalFailure(e.to_string()))?;
-            let compressed_bytes = encoder
-                .finish()
-                .map_err(|e| OTelSdkError::InternalFailure(e.to_string()))?;
+                self.output.write_line(&json_str)?;
+            } else {
+                // Otherwise use the original format with base64, gzip, etc.
+                // Serialize to protobuf
+                let proto_bytes = request.encode_to_vec();
 
-            // Base64 encode
-            let payload = base64_engine.encode(compressed_bytes);
+                // Compress with GZIP
+                let mut encoder =
+                    GzEncoder::new(Vec::new(), Compression::new(self.gzip_level as u32));
+                encoder
+                    .write_all(&proto_bytes)
+                    .map_err(|e| OTelSdkError::InternalFailure(e.to_string()))?;
+                let compressed_bytes = encoder
+                    .finish()
+                    .map_err(|e| OTelSdkError::InternalFailure(e.to_string()))?;
 
-            // Prepare the output
-            let output_data = ExporterOutput {
-                version: VERSION,
-                source: Self::get_service_name(),
-                endpoint: DEFAULT_ENDPOINT,
-                method: "POST",
-                content_type: "application/x-protobuf",
-                content_encoding: "gzip",
-                headers: Self::parse_headers(),
-                payload,
-                base64: true,
-            };
+                // Base64 encode
+                let payload = base64_engine.encode(compressed_bytes);
 
-            // Write using the output implementation
-            self.output.write_line(
-                &serde_json::to_string(&output_data)
-                    .map_err(|e| OTelSdkError::InternalFailure(e.to_string()))?,
-            )?;
+                // Prepare the output
+                let output_data = ExporterOutput {
+                    version: VERSION,
+                    source: Self::get_service_name(),
+                    endpoint: DEFAULT_ENDPOINT,
+                    method: "POST",
+                    content_type: "application/x-protobuf",
+                    content_encoding: "gzip",
+                    headers: Self::parse_headers(),
+                    payload,
+                    base64: true,
+                };
+
+                // Write using the output implementation
+                self.output.write_line(
+                    &serde_json::to_string(&output_data)
+                        .map_err(|e| OTelSdkError::InternalFailure(e.to_string()))?,
+                )?;
+            }
 
             Ok(())
         })();
@@ -785,5 +862,47 @@ mod tests {
 
         // Clean up
         std::env::remove_var(COMPRESSION_LEVEL_ENV_VAR);
+    }
+
+    fn with_test_plain_json_output() -> (OtlpStdoutSpanExporter, Arc<TestOutput>) {
+        let output = Arc::new(TestOutput::new());
+        let exporter = OtlpStdoutSpanExporter {
+            gzip_level: 0,
+            resource: None,
+            output: output.clone() as Arc<dyn Output>,
+            use_plain_json: true,
+        };
+        (exporter, output)
+    }
+
+    #[tokio::test]
+    async fn test_export_plain_json() {
+        let (mut exporter, output) = with_test_plain_json_output();
+        let span = create_test_span();
+
+        let result = exporter.export(vec![span]).await;
+        assert!(result.is_ok());
+
+        let output = output.get_output();
+        assert_eq!(output.len(), 1);
+
+        // Parse and verify it's valid JSON
+        let json: Value = serde_json::from_str(&output[0]).unwrap();
+
+        // Verify it contains the expected fields for OTLP JSON format
+        assert!(json.get("resource_spans").is_some());
+
+        // Resource spans should be an array
+        let resource_spans = json.get("resource_spans").unwrap().as_array().unwrap();
+        assert!(resource_spans.len() > 0);
+
+        // Verify it doesn't contain any of the wrapper fields
+        assert!(json.get("__otel_otlp_stdout").is_none());
+        assert!(json.get("source").is_none());
+        assert!(json.get("endpoint").is_none());
+        assert!(json.get("method").is_none());
+        assert!(json.get("content-type").is_none());
+        assert!(json.get("content-encoding").is_none());
+        assert!(json.get("base64").is_none());
     }
 }
