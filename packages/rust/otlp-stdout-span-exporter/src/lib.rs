@@ -890,10 +890,10 @@ mod tests {
         let json: Value = serde_json::from_str(&output[0]).unwrap();
 
         // Verify it contains the expected fields for OTLP JSON format
-        assert!(json.get("resource_spans").is_some());
+        assert!(json.get("resourceSpans").is_some());
 
         // Resource spans should be an array
-        let resource_spans = json.get("resource_spans").unwrap().as_array().unwrap();
+        let resource_spans = json.get("resourceSpans").unwrap().as_array().unwrap();
         assert!(resource_spans.len() > 0);
 
         // Verify it doesn't contain any of the wrapper fields
