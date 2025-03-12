@@ -17,15 +17,13 @@ async fn main() {
 
     // Create spans
     tracer.in_span("parent-operation", |_cx| {
-        println!("Doing work in parent span...");
-
         // Create nested spans
         tracer.in_span("child1", |_cx| {
-            println!("Doing work in child1 span...");
+            // Child span 1 work would go here
         });
 
         tracer.in_span("child2", |_cx| {
-            println!("Doing work in child2 span...");
+            // Child span 2 work would go here
         });
     });
 
