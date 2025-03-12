@@ -1,18 +1,18 @@
 [
   {
-    "Timestamp": "2025-03-12 18:24:59.304143111",
-    "TraceId": "e878436c3f245095c12fbf9dd73ee468",
-    "SpanId": "1e13d637c3bdc2c1",
-    "ParentSpanId": "d843bc25057de67b",
+    "Timestamp": "2025-03-12 18:40:19.008027450",
+    "TraceId": "e47dd2af68324b37465c21889280b289",
+    "SpanId": "9fbf0fd8882c3703",
+    "ParentSpanId": "87a6da29b93f17ef",
     "TraceState": "",
     "SpanName": "child1",
     "SpanKind": "Internal",
     "ServiceName": "unknown_service",
     "ResourceAttributes": {
-      "service.name": "unknown_service",
-      "telemetry.sdk.language": "rust",
       "telemetry.sdk.name": "opentelemetry",
-      "telemetry.sdk.version": "0.28.0"
+      "telemetry.sdk.language": "rust",
+      "telemetry.sdk.version": "0.28.0",
+      "service.name": "unknown_service"
     },
     "ScopeName": "hello-world",
     "ScopeVersion": "",
@@ -33,19 +33,19 @@
     }
   },
   {
-    "Timestamp": "2025-03-12 18:24:59.304150707",
-    "TraceId": "e878436c3f245095c12fbf9dd73ee468",
-    "SpanId": "cad7af5118d97efb",
-    "ParentSpanId": "d843bc25057de67b",
+    "Timestamp": "2025-03-12 18:40:19.008033273",
+    "TraceId": "e47dd2af68324b37465c21889280b289",
+    "SpanId": "85bc9d7be88df04c",
+    "ParentSpanId": "87a6da29b93f17ef",
     "TraceState": "",
     "SpanName": "child2",
     "SpanKind": "Internal",
     "ServiceName": "unknown_service",
     "ResourceAttributes": {
-      "service.name": "unknown_service",
-      "telemetry.sdk.language": "rust",
       "telemetry.sdk.name": "opentelemetry",
-      "telemetry.sdk.version": "0.28.0"
+      "telemetry.sdk.language": "rust",
+      "telemetry.sdk.version": "0.28.0",
+      "service.name": "unknown_service"
     },
     "ScopeName": "hello-world",
     "ScopeVersion": "",
@@ -66,19 +66,19 @@
     }
   },
   {
-    "Timestamp": "2025-03-12 18:24:59.304139094",
-    "TraceId": "e878436c3f245095c12fbf9dd73ee468",
-    "SpanId": "d843bc25057de67b",
+    "Timestamp": "2025-03-12 18:40:19.008023973",
+    "TraceId": "e47dd2af68324b37465c21889280b289",
+    "SpanId": "87a6da29b93f17ef",
     "ParentSpanId": "",
     "TraceState": "",
     "SpanName": "parent-operation",
     "SpanKind": "Internal",
     "ServiceName": "unknown_service",
     "ResourceAttributes": {
-      "service.name": "unknown_service",
-      "telemetry.sdk.language": "rust",
       "telemetry.sdk.name": "opentelemetry",
-      "telemetry.sdk.version": "0.28.0"
+      "telemetry.sdk.language": "rust",
+      "telemetry.sdk.version": "0.28.0",
+      "service.name": "unknown_service"
     },
     "ScopeName": "hello-world",
     "ScopeVersion": "",
