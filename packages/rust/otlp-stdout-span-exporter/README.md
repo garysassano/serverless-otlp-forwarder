@@ -13,7 +13,7 @@ This crate provides an implementation of OpenTelemetry's `SpanExporter` that wri
 
 ## Usage
 
-### Basic Usage with OTLP Format
+### OTLP/JSON Format
 
 ```rust
 use opentelemetry::trace::{Tracer, TracerProvider};
@@ -48,7 +48,7 @@ async fn main() {
 }
 ```
 
-### Using ClickHouse Format
+### ClickHouse Format
 
 ```rust
 use opentelemetry::trace::{Tracer, TracerProvider};
@@ -89,7 +89,7 @@ async fn main() {
 
 ## Output Formats
 
-### OTLP JSON Format (Default)
+### OTLP/JSON Format
 
 The default format is the standard OTLP JSON format:
 
