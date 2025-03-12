@@ -1,11 +1,11 @@
-use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 /// Represents a span in the ClickHouse format
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(non_snake_case)]
 pub struct ClickhouseSpan {
     pub Timestamp: String,
     pub TraceId: String,
@@ -27,6 +27,7 @@ pub struct ClickhouseSpan {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(non_snake_case)]
 pub struct ClickhouseEvents {
     pub Timestamp: Vec<String>,
     pub Name: Vec<String>,
@@ -34,6 +35,7 @@ pub struct ClickhouseEvents {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(non_snake_case)]
 pub struct ClickhouseLinks {
     pub TraceId: Vec<String>,
     pub SpanId: Vec<String>,
@@ -68,7 +70,7 @@ fn format_timestamp(timestamp_nanos: u64) -> String {
     let nanos = timestamp_nanos % 1_000_000_000;
 
     // Convert to SystemTime
-    let system_time = UNIX_EPOCH + std::time::Duration::new(seconds as u64, nanos as u32);
+    let system_time = UNIX_EPOCH + std::time::Duration::new(seconds, nanos as u32);
 
     // Format as ISO 8601 with microsecond precision
     let datetime = chrono::DateTime::<chrono::Utc>::from(system_time);
@@ -273,11 +275,7 @@ pub fn transform_otlp_to_clickhouse(otlp_json: &str) -> Result<String, serde_jso
                             };
 
                             // Calculate duration in nanoseconds
-                            let duration = if end_time_nanos > start_time_nanos {
-                                end_time_nanos - start_time_nanos
-                            } else {
-                                0
-                            };
+                            let duration = end_time_nanos.saturating_sub(start_time_nanos);
 
                             // Format timestamp
                             let timestamp = format_timestamp(start_time_nanos);
