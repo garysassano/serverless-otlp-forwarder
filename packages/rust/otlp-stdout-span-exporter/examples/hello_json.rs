@@ -16,7 +16,7 @@ async fn main() {
     // Create a tracer
     let tracer = provider.tracer("hello-world");
 
-    // Create spans without any println statements
+    // Create spans
     tracer.in_span("parent-operation", |_cx| {
         // Create child spans
         tracer.in_span("child1", |_| {});
