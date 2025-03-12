@@ -91,7 +91,7 @@ async fn main() {
 
 ### OTLP/JSON Format
 
-The default format is the standard OTLP JSON format:
+The default format is the standard OTLP/JSON format:
 
 ```json
 {
