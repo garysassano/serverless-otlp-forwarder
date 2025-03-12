@@ -30,5 +30,5 @@ async fn main() {
     println!("Finishing parent operation");
 
     // Shut down the provider to ensure all spans are exported
-    provider.shutdown();
+    let _ = provider.shutdown();
 }
