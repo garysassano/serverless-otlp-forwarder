@@ -4,7 +4,7 @@ use otlp_stdout_span_exporter::OtlpStdoutSpanExporter;
 
 #[tokio::main]
 async fn main() {
-    // Create a new stdout exporter with JSON format
+    // Create a new stdout exporter with OTLP format
     let exporter = OtlpStdoutSpanExporter::new();
 
     // Create a new tracer provider with batch export
