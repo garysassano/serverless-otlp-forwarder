@@ -407,7 +407,7 @@ async fn run() -> Result<()> {
                             .iter()
                             .map(|(k, v)| types::EnvVar { key: k.clone(), value: v.clone() })
                             .collect(),
-                        client_metrics: true,
+                        client_metrics_mode: true,
                         proxy_function: test.get_proxy_function(&batch_config.global),
                     };
 
@@ -442,8 +442,9 @@ async fn run() -> Result<()> {
         }
     }?;
     // Ensure all spans are exported before exit
-    tracer_provider.force_flush();
-    tracer_provider.shutdown()?;
+    if let Err(e) = tracer_provider.force_flush() {
+        tracing::error!("Failed to flush spans: {}", e);
+    }
 
 
     Ok(())
@@ -494,7 +495,7 @@ async fn execute_stack_command(
         payload,
         parallel,
         environment,
-        client_metrics: true,
+        client_metrics_mode: true,
         proxy_function: proxy,
     };
 
