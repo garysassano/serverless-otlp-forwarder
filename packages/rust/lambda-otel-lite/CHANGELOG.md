@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2025-03-19
+### Added
+- Added module for centralized constants to ensure consistency across the codebase
+- Added environment variable precedence in configuration (env vars > constructor params > defaults)
+- Added resource attributes based on explicitly set environment variables only
+- Added support for AWS X-Ray propagation through the OTEL_PROPAGATORS environment variable
+- Added LambdaXrayPropagator for enhanced X-Ray propagation with Lambda environment detection
+- Added with_named_propagator() method to TelemetryConfigBuilder for simpler propagator configuration
+- Added default combined propagator setup with both W3C TraceContext and X-Ray
+- Improved context propagation by extracting both W3C and X-Ray trace headers
+
+### Changed
+- Improved environment variable handling in LambdaSpanProcessor for batch size and queue size
+- Updated resource attribute handling logic for better consistency and efficiency
+- Fixed potential issues with default values and improved error handling
+- Enhanced documentation with more details on configuration options
+- Updated dependency versions
+- Modified SpanAttributes to support both W3C Trace Context and AWS X-Ray headers
+
+### Documentation
+- Added documentation for X-Ray propagation setup and configuration
+- Added examples for using multiple propagators together
+- Updated documentation on context propagation in HTTP events
+
 ## [0.10.2] - 2025-03-15
 ### Added
 - Support for controlling the fmt layer through the `LAMBDA_TRACING_ENABLE_FMT_LAYER` environment variable

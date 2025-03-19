@@ -51,7 +51,7 @@ By leveraging Lambda's execution lifecycle and providing multiple processing mod
 - **Lambda Extension Integration**: Built-in extension for efficient telemetry export
 - **Efficient Memory Usage**: Fixed-size queue to prevent memory growth
 - **AWS Event Support**: Automatic extraction of attributes from common AWS event types
-- **Flexible Context Propagation**: Support for W3C Trace Context and custom propagators
+- **Flexible Context Propagation**: Support for W3C Trace Context, AWS X-Ray, and custom propagators
 
 ## Architecture and Modules
 
@@ -75,10 +75,16 @@ By leveraging Lambda's execution lifecycle and providing multiple processing mod
   - Environment-based configuration
   - Custom attribute support
 
+- `constants`: Centralized configuration constants
+  - Environment variable names
+  - Default values
+  - Resource attribute keys
+  - Ensures consistency across the codebase
+
 - `extractors`: Event processing
   - Built-in support for API Gateway and ALB events
   - Extensible trait system for custom events
-  - W3C Trace Context propagation
+  - W3C Trace Context and AWS X-Ray propagation
 
 - `layer`: Tower middleware integration
   - Best for complex services with middleware chains
@@ -332,8 +338,9 @@ Note that the `.with_span_processor` method accepts a `SpanProcessor` trait obje
 
 ### Custom configuration with context propagators:
 ```rust, no_run
-use lambda_otel_lite::{init_telemetry, TelemetryConfig};
+use lambda_otel_lite::{init_telemetry, TelemetryConfig, propagation::LambdaXrayPropagator};
 use opentelemetry_sdk::propagation::{BaggagePropagator, TraceContextPropagator};
+use opentelemetry_aws::trace::XrayPropagator;
 use lambda_runtime::Error;
 
 #[tokio::main]
@@ -341,6 +348,10 @@ async fn main() -> Result<(), Error> {
     let config = TelemetryConfig::builder()
         // Add W3C Trace Context propagator (default)
         .with_propagator(TraceContextPropagator::new())
+        // Add AWS X-Ray propagator
+        .with_propagator(XrayPropagator::new())
+        // Add Lambda-enhanced X-Ray propagator (with _X_AMZN_TRACE_ID environment variable support)
+        .with_propagator(LambdaXrayPropagator::new())
         // Add W3C Baggage propagator
         .with_propagator(BaggagePropagator::new())
         .build();
@@ -353,8 +364,14 @@ async fn main() -> Result<(), Error> {
 }
 ```
 
-Note: By default, the crate uses the W3C Trace Context propagator (`TraceContextPropagator`). You can add additional propagators using the `with_propagator` method. Multiple propagators will be combined into a composite propagator.
+By default, the crate combines two propagators: W3C Trace Context (`TraceContextPropagator`) and the Lambda-specific X-Ray propagator (`LambdaXrayPropagator`), providing out-of-the-box support for both industry-standard tracing and AWS-specific tracing. You can add additional propagators using the `with_propagator` method, or use `with_named_propagator` with the following options:
 
+- `"tracecontext"`: W3C Trace Context propagator
+- `"xray"`: Standard AWS X-Ray propagator
+- `"xray-lambda"`: Enhanced X-Ray propagator with Lambda environment variable support
+- `"none"`: No propagation (disables context propagation)
+
+Multiple propagators are combined into a composite propagator that can handle various trace context formats.
 
 ### Using the Tower Layer
 You can "wrap" your handler in the `OtelTracingLayer` using the `ServiceBuilder` from the `tower` crate:
@@ -468,7 +485,7 @@ The crate provides built-in support for extracting span attributes from common A
 - API Gateway HTTP API (v2)
 - Application Load Balancer (ALB)
 
-Each extractor is designed to handle a specific event type and extract relevant attributes, including trace context propagation from HTTP headers.
+Each extractor is designed to handle a specific event type and extract relevant attributes, including trace context propagation from HTTP headers (both W3C Trace Context and AWS X-Ray formats).
 
 ### Custom Extractors
 
@@ -487,6 +504,7 @@ use serde_json::Value as JsonValue;
 struct MyEvent {
     user_id: String,
     trace_parent: Option<String>,
+    xray_trace_id: Option<String>,
 }
 
 // Implement SpanAttributesExtractor for the custom event
@@ -497,8 +515,13 @@ impl SpanAttributesExtractor for MyEvent {
 
         // Add trace context if available
         let mut carrier = HashMap::new();
+        // Add W3C Trace Context header
         if let Some(header) = &self.trace_parent {
             carrier.insert("traceparent".to_string(), header.clone());
+        }
+        // Add X-Ray trace header
+        if let Some(header) = &self.xray_trace_id {
+            carrier.insert("x-amzn-trace-id".to_string(), header.clone());
         }
 
         SpanAttributes::builder()
@@ -533,7 +556,7 @@ async fn main() -> Result<(), Error> {
 The `SpanAttributes` object returned by the extractor contains:
 
 - `attributes`: A map of attributes to add to the span
-- `carrier`: Optional map containing trace context headers for propagation
+- `carrier`: Optional map containing trace context headers for propagation (supports both W3C and X-Ray formats)
 - `span_name`: Optional custom name for the span (defaults to handler name)
 
 ### Handling Standard AWS Lambda Events
@@ -624,26 +647,31 @@ By creating a newtype wrapper, you can add custom span attributes specific to ea
 
 ## Environment Variables
 
-The crate can be configured using the following environment variables:
+The library uses environment variables for configuration, with a clear precedence order:
+
+1. Environment variables (highest precedence)
+2. Constructor parameters 
+3. Default values (lowest precedence)
 
 ### Processing Configuration
-- `LAMBDA_EXTENSION_SPAN_PROCESSOR_MODE`: Controls span processing strategy
-  - `sync`: Direct export in handler thread (default)
-  - `async`: Deferred export via extension
-  - `finalize`: Custom export strategy
-- `LAMBDA_SPAN_PROCESSOR_QUEUE_SIZE`: Maximum number of spans to queue (default: 2048)
-- `LAMBDA_SPAN_PROCESSOR_BATCH_SIZE`: Maximum number of spans to export in a single batch (default: 512)
+
+- `LAMBDA_EXTENSION_SPAN_PROCESSOR_MODE`: Controls processing mode
+  - `"sync"` for Sync mode (default)
+  - `"async"` for Async mode
+  - `"finalize"` for Finalize mode
+- `LAMBDA_SPAN_PROCESSOR_QUEUE_SIZE`: Maximum spans to queue (default: 2048)
+- `LAMBDA_SPAN_PROCESSOR_BATCH_SIZE`: Maximum batch size (default: 512)
 
 ### Resource Configuration
-- `OTEL_SERVICE_NAME`: Override the service name (defaults to function name)
-- `OTEL_RESOURCE_ATTRIBUTES`: Additional resource attributes in key=value,key2=value2 format
+
+- `OTEL_SERVICE_NAME`: Service name for spans (falls back to `AWS_LAMBDA_FUNCTION_NAME`)
+- `OTEL_RESOURCE_ATTRIBUTES`: Additional resource attributes in format: `key=value,key2=value2`
+
+Resource attributes from environment variables are only included in the resource when the environment variable is explicitly set. This ensures that the reported resource attributes accurately reflect the actual configuration used.
 
 ### Export Configuration
-- `OTLP_STDOUT_SPAN_EXPORTER_COMPRESSION_LEVEL`: Gzip compression level for stdout exporter
-  - 0: No compression
-  - 1: Best speed
-  - 6: Good balance between size and speed (default)
-  - 9: Best compression
+
+- `OTLP_STDOUT_SPAN_EXPORTER_COMPRESSION_LEVEL`: GZIP compression level (0-9, default: 6)
 
 ### Logging and Debug
 - `LAMBDA_TRACING_ENABLE_FMT_LAYER`: Enable console output of spans for debugging (default: false)

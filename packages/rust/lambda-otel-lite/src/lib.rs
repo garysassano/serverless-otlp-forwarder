@@ -93,7 +93,7 @@
 //!   - Falls back to AWS_LAMBDA_FUNCTION_NAME
 //!   - Required for proper service identification
 //!
-//! See [`telemetry`] module for detailed configuration options.
+//! See [`constants`] module for centralized constants and [`telemetry`] module for detailed configuration options.
 //!
 //! # Examples
 //!
@@ -153,6 +153,7 @@
 
 pub use otlp_stdout_span_exporter::OtlpStdoutSpanExporter;
 
+pub mod constants;
 pub mod extension;
 pub mod extractors;
 pub mod handler;
@@ -160,6 +161,7 @@ pub mod layer;
 pub mod logger;
 pub mod mode;
 pub mod processor;
+pub mod propagation;
 pub mod resource;
 pub mod telemetry;
 
@@ -169,6 +171,7 @@ pub use handler::create_traced_handler;
 pub use layer::OtelTracingLayer;
 pub use mode::ProcessorMode;
 pub use processor::LambdaSpanProcessor;
+pub use propagation::LambdaXrayPropagator;
 pub use resource::get_lambda_resource;
 pub use telemetry::{
     init_telemetry, TelemetryCompletionHandler, TelemetryConfig, TelemetryConfigBuilder,
