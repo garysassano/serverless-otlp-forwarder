@@ -26,18 +26,18 @@
 //!
 //! ```rust
 //! use otlp_stdout_client::StdoutClient;
-//! use opentelemetry_sdk::trace::TracerProvider;
+//! use opentelemetry_sdk::trace::SdkTracerProvider;
 //! use opentelemetry_otlp::{WithExportConfig, WithHttpConfig};
 //! use opentelemetry::trace::Tracer;
 //! use opentelemetry::global;
 //!
-//! fn init_tracer_provider() -> Result<TracerProvider, Box<dyn std::error::Error>> {
+//! fn init_tracer_provider() -> Result<SdkTracerProvider, Box<dyn std::error::Error>> {
 //!     let exporter = opentelemetry_otlp::SpanExporter::builder()
 //!         .with_http()
 //!         .with_http_client(StdoutClient::default())
 //!         .build()?;
 //!     
-//!     let tracer_provider = opentelemetry_sdk::trace::TracerProvider::builder()
+//!     let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
 //!         .with_simple_exporter(exporter)
 //!         .build();
 //!
@@ -47,7 +47,7 @@
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let tracer_provider = init_tracer_provider()?;
-//!     global::set_tracer_provider(tracer_provider);
+//!     global::set_tracer_provider(tracer_provider.clone());
 //!     
 //!     let tracer = global::tracer("my_tracer");
 //!     
@@ -117,7 +117,7 @@ pub const KEY_BASE64: &str = "base64";
 pub const KEY_HEADERS: &str = "headers";
 
 // Constant for OTEL version prefix
-pub const OTEL_VERSION_PREFIX: &str = "oltp-stdout-";
+pub const OTEL_VERSION_PREFIX: &str = "otlp-stdout-";
 
 // Constant for GZIP encoding
 pub const ENCODING_GZIP: &str = "gzip";

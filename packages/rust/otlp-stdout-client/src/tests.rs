@@ -103,11 +103,11 @@ async fn run_tracer_test() -> Result<String, Box<dyn std::error::Error + Send + 
         .build()?;
 
     // Create a tracer provider and set it as the global provider
-    let tracer_provider = opentelemetry_sdk::trace::TracerProvider::builder()
+    let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_simple_exporter(exporter)
         .build();
 
-    opentelemetry::global::set_tracer_provider(tracer_provider);
+    opentelemetry::global::set_tracer_provider(tracer_provider.clone());
     let tracer = opentelemetry::global::tracer("my_tracer");
 
     // Create a sample span
@@ -116,7 +116,7 @@ async fn run_tracer_test() -> Result<String, Box<dyn std::error::Error + Send + 
     });
 
     // Shut down the tracer provider to ensure all spans are flushed
-    opentelemetry::global::shutdown_tracer_provider();
+    let _ = tracer_provider.shutdown();
 
     // Add a small delay to ensure all data is written
     tokio::time::sleep(Duration::from_millis(100)).await;

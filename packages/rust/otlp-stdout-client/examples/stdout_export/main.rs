@@ -2,11 +2,11 @@ use opentelemetry::global;
 use opentelemetry::trace::{TraceContextExt, Tracer};
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::{Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
-use opentelemetry_sdk::{runtime::Tokio, trace::TracerProvider};
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use otlp_stdout_client::StdoutClient;
 
 /// Initialize the tracer provider with the StdoutClient
-fn init_tracer_provider() -> Result<TracerProvider, Box<dyn std::error::Error>> {
+fn init_tracer_provider() -> Result<SdkTracerProvider, Box<dyn std::error::Error>> {
     // Read protocol from env var
     let protocol = match std::env::var("OTEL_EXPORTER_OTLP_PROTOCOL")
         .unwrap_or_default()
@@ -30,9 +30,9 @@ fn init_tracer_provider() -> Result<TracerProvider, Box<dyn std::error::Error>> 
         .with_http_client(StdoutClient::default())
         .build()?;
 
-    let tracer_provider = TracerProvider::builder()
-        .with_batch_exporter(exporter, Tokio)
-        .with_resource(opentelemetry_sdk::Resource::default())
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter)
+        .with_resource(opentelemetry_sdk::Resource::builder().build())
         .build();
 
     Ok(tracer_provider)
@@ -42,7 +42,7 @@ fn init_tracer_provider() -> Result<TracerProvider, Box<dyn std::error::Error>> 
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize and set the global tracer provider
     let tracer_provider = init_tracer_provider()?;
-    global::set_tracer_provider(tracer_provider);
+    global::set_tracer_provider(tracer_provider.clone());
 
     // Get a tracer from the provider
     let tracer = global::tracer("basic-example");
@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Ensure all spans are exported before exit
-    global::shutdown_tracer_provider();
+    let _ = tracer_provider.shutdown();
 
     Ok(())
 }
