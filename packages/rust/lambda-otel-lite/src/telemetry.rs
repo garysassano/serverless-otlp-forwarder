@@ -91,6 +91,8 @@
 //! - `LAMBDA_EXTENSION_SPAN_PROCESSOR_MODE`: Processing mode (sync/async/finalize)
 //! - `RUST_LOG` or `AWS_LAMBDA_LOG_LEVEL`: Log level configuration
 
+use crate::constants::defaults;
+use crate::constants::env_vars;
 use crate::{
     constants, extension::register_extension, mode::ProcessorMode, processor::LambdaSpanProcessor,
     propagation::LambdaXrayPropagator, resource::get_lambda_resource,
@@ -256,6 +258,10 @@ pub struct TelemetryConfig {
     /// to being exported through the configured span processors. This is useful
     /// for debugging but adds overhead and should be disabled in production.
     ///
+    /// This can also be controlled via the `LAMBDA_OTEL_ENABLE_FMT_LAYER` environment variable.
+    /// Setting this to "true" will enable console output even if this field is false in the code.
+    /// This allows toggling logging for debugging without code changes.
+    ///
     /// Default: `false`
     #[builder(default = false)]
     pub enable_fmt_layer: bool,
@@ -291,11 +297,7 @@ pub struct TelemetryConfig {
 
 impl Default for TelemetryConfig {
     fn default() -> Self {
-        let enable_fmt_layer = env::var("LAMBDA_TRACING_ENABLE_FMT_LAYER")
-            .map(|val| val.to_lowercase() == "true" || val == "1")
-            .unwrap_or(false);
-
-        Self::builder().enable_fmt_layer(enable_fmt_layer).build()
+        Self::builder().build()
     }
 }
 
@@ -572,8 +574,15 @@ pub async fn init_telemetry(
         ))
         .with(env_filter);
 
-    // Always initialize the subscriber, with or without fmt layer
-    if config.enable_fmt_layer {
+    // Check if fmt layer should be enabled via environment variable
+    let enable_fmt = env::var(env_vars::ENABLE_FMT_LAYER)
+        .map(|v| v.to_lowercase() == "true")
+        .unwrap_or(defaults::ENABLE_FMT_LAYER);
+
+    // Enable fmt layer if either configured in code or enabled via environment
+    // This allows toggling logging via LAMBDA_TRACING_ENABLE_FMT_LAYER=true without code changes
+    // Log level is still controlled by AWS_LAMBDA_LOG_LEVEL or RUST_LOG as usual
+    if config.enable_fmt_layer || enable_fmt {
         // Determine if the lambda logging configuration is set to output json logs
         let is_json = env::var("AWS_LAMBDA_LOG_FORMAT")
             .unwrap_or_default()
@@ -746,24 +755,32 @@ mod tests {
         assert!(completion_handler.sender.is_none());
     }
 
-    #[test]
-    fn test_telemetry_config_env_fmt_layer() {
+    #[tokio::test]
+    #[sealed_test]
+    async fn test_telemetry_config_env_fmt_layer() {
         cleanup_env();
 
-        // Test with environment variable set to true
+        // Test that environment variable is respected
         env::set_var("LAMBDA_TRACING_ENABLE_FMT_LAYER", "true");
         let config = TelemetryConfig::default();
+        assert!(!config.enable_fmt_layer); // Config should not be affected by env var
+        let enable_fmt = env::var(env_vars::ENABLE_FMT_LAYER)
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(defaults::ENABLE_FMT_LAYER);
+        assert!(enable_fmt); // But the env var should be true
+
+        // Test that code-level setting works independently
+        let config = TelemetryConfig::builder().enable_fmt_layer(true).build();
         assert!(config.enable_fmt_layer);
 
-        // Test with environment variable set to 1
-        env::set_var("LAMBDA_TRACING_ENABLE_FMT_LAYER", "1");
-        let config = TelemetryConfig::default();
-        assert!(config.enable_fmt_layer);
-
-        // Test with environment variable set to false
-        env::set_var("LAMBDA_TRACING_ENABLE_FMT_LAYER", "false");
+        // Test default behavior
+        env::remove_var("LAMBDA_TRACING_ENABLE_FMT_LAYER");
         let config = TelemetryConfig::default();
         assert!(!config.enable_fmt_layer);
+        let enable_fmt = env::var(env_vars::ENABLE_FMT_LAYER)
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(defaults::ENABLE_FMT_LAYER);
+        assert!(!enable_fmt);
 
         // Clean up
         cleanup_env();
