@@ -6,10 +6,6 @@ authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
-[[bin]]
-name = "log_processor"
-path = "src/log_processor.rs"
-
 [dependencies]
 tokio.workspace = true
 serde_json.workspace = true
@@ -42,3 +38,7 @@ wiremock = "0.6"
 mockito = "1.2"
 chrono = "0.4.39"
 tokio = { version = "1.0", features = ["full"] }
+
+[[bin]]
+name = "stdout_processor"
+path = "src/main.rs"
