@@ -101,7 +101,7 @@ Resources:
     Type: AWS::Logs::AccountPolicy
     Condition: RouteAllLogs
     DependsOn:
-      - LogsProcessorFunctionPermission
+      - LogsProcessorPermission
     Properties:
       PolicyName: "LambdaSubscriptionPolicy"
       PolicyDocument:
