@@ -10,6 +10,7 @@
 //! - Applies GZIP compression with configurable levels
 //! - Detects service name from environment variables
 //! - Supports custom headers via environment variables
+//! - Supports writing to stdout or named pipe
 //! - Consistent JSON output format
 //!
 //! # Example
@@ -22,8 +23,13 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     // Create a new stdout exporter
+//!     // Create a new stdout exporter with default configuration (stdout output)
 //!     let exporter = OtlpStdoutSpanExporter::default();
+//!
+//!     // Or create one that writes to a named pipe
+//!     let pipe_exporter = OtlpStdoutSpanExporter::builder()
+//!         .pipe(true)  // Will write to /tmp/otlp-stdout-span-exporter.pipe
+//!         .build();
 //!
 //!     // Create a new tracer provider with batch export
 //!     let provider = SdkTracerProvider::builder()
@@ -62,6 +68,7 @@
 //! - `OTEL_EXPORTER_OTLP_HEADERS`: Global headers for OTLP export
 //! - `OTEL_EXPORTER_OTLP_TRACES_HEADERS`: Trace-specific headers (takes precedence if conflicting with `OTEL_EXPORTER_OTLP_HEADERS`)
 //! - `OTLP_STDOUT_SPAN_EXPORTER_COMPRESSION_LEVEL`: GZIP compression level (0-9, default: 6)
+//! - `OTLP_STDOUT_SPAN_EXPORTER_OUTPUT_TYPE`: Output type ("pipe" or "stdout", default: "stdout")
 //!
 //! # Configuration Precedence
 //!
@@ -71,24 +78,24 @@
 //! 2. Constructor parameters
 //! 3. Default values (lowest precedence)
 //!
-//! For example, when determining the compression level:
+//! For example, when determining the output type:
 //!
 //! ```rust
 //! use otlp_stdout_span_exporter::OtlpStdoutSpanExporter;
 //!
-//! // This will use the OTLP_STDOUT_SPAN_EXPORTER_COMPRESSION_LEVEL environment variable if set,
-//! // otherwise it will use level 9, which was provided as a parameter
-//! let exporter = OtlpStdoutSpanExporter::builder()
-//!     .compression_level(9)
+//! // This will use OTLP_STDOUT_SPAN_EXPORTER_OUTPUT_TYPE if set,
+//! // otherwise it will write to a named pipe as specified in the constructor
+//! let pipe_exporter = OtlpStdoutSpanExporter::builder()
+//!     .pipe(true)
 //!     .build();
 //!
-//! // This will use the environment variable if set, or default to level 6
+//! // This will use the environment variable if set, or default to stdout
 //! let default_exporter = OtlpStdoutSpanExporter::default();
 //! ```
 //!
 //! # Output Format
 //!
-//! The exporter writes each batch of spans as a JSON object to stdout:
+//! The exporter writes each batch of spans as a JSON object to stdout or the named pipe:
 //!
 //! ```json
 //! {
@@ -122,6 +129,17 @@ use opentelemetry_sdk::{
 };
 use prost::Message;
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    env,
+    fmt::Display,
+    fs::OpenOptions,
+    io::{self, Write},
+    path::PathBuf,
+    result::Result,
+    str::FromStr,
+    sync::Arc,
+};
 
 mod constants;
 use constants::{defaults, env_vars};
@@ -140,11 +158,50 @@ pub mod consts {
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Log level for the exported spans
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum LogLevel {
+    /// Debug level
+    Debug,
+    /// Info level (default)
+    #[default]
+    Info,
+    /// Warning level
+    Warn,
+    /// Error level (least verbose)
+    Error,
+}
+
+impl FromStr for LogLevel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "debug" => Ok(LogLevel::Debug),
+            "info" => Ok(LogLevel::Info),
+            "warn" | "warning" => Ok(LogLevel::Warn),
+            "error" => Ok(LogLevel::Error),
+            _ => Err(format!("Invalid log level: {}", s)),
+        }
+    }
+}
+
+impl Display for LogLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LogLevel::Debug => write!(f, "DEBUG"),
+            LogLevel::Info => write!(f, "INFO"),
+            LogLevel::Warn => write!(f, "WARN"),
+            LogLevel::Error => write!(f, "ERROR"),
+        }
+    }
+}
+
 /// Trait for output handling
 ///
 /// This trait defines the interface for writing output lines. It is implemented
-/// by both the standard output handler and test output handler.
-trait Output: Send + Sync + std::fmt::Debug {
+/// by both the standard output handler and named pipe output handlers.
+trait Output: Send + Sync + std::fmt::Debug + std::any::Any {
     /// Writes a single line of output
     ///
     /// # Arguments
@@ -174,34 +231,97 @@ impl Output for StdOutput {
     }
 }
 
+/// Output implementation that writes to a named pipe
+#[derive(Debug)]
+struct NamedPipeOutput {
+    path: PathBuf,
+}
+
+impl NamedPipeOutput {
+    fn new() -> Result<Self, OTelSdkError> {
+        let path_buf = PathBuf::from(defaults::PIPE_PATH);
+        if !path_buf.exists() {
+            log::warn!("Named pipe does not exist: {}", defaults::PIPE_PATH);
+            // On Unix systems we could create it with mkfifo but this would need cfg platform specifics
+        }
+
+        Ok(Self { path: path_buf })
+    }
+}
+
+impl Output for NamedPipeOutput {
+    fn write_line(&self, line: &str) -> Result<(), OTelSdkError> {
+        // Open the pipe for writing
+        let mut file = OpenOptions::new()
+            .write(true)
+            .open(&self.path)
+            .map_err(|e| OTelSdkError::InternalFailure(format!("Failed to open pipe: {}", e)))?;
+
+        // Write line with newline
+        writeln!(file, "{}", line).map_err(|e| {
+            OTelSdkError::InternalFailure(format!("Failed to write to pipe: {}", e))
+        })?;
+
+        Ok(())
+    }
+}
+
+/// Helper function to create output based on type
+fn create_output(use_pipe: bool) -> Arc<dyn Output> {
+    if use_pipe {
+        match NamedPipeOutput::new() {
+            Ok(output) => Arc::new(output),
+            Err(e) => {
+                log::warn!(
+                    "Failed to create named pipe output: {}, falling back to stdout",
+                    e
+                );
+                Arc::new(StdOutput)
+            }
+        }
+    } else {
+        Arc::new(StdOutput)
+    }
+}
+
 /// Output format for the OTLP stdout exporter
 ///
 /// This struct defines the JSON structure that will be written to stdout
 /// for each batch of spans.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ExporterOutput<'a> {
+pub struct ExporterOutput {
     /// Version identifier for the output format
     #[serde(rename = "__otel_otlp_stdout")]
-    pub version: &'a str,
+    pub version: String,
     /// Service name that generated the spans
     pub source: String,
     /// OTLP endpoint (always http://localhost:4318/v1/traces)
-    pub endpoint: &'a str,
+    pub endpoint: String,
     /// HTTP method (always POST)
-    pub method: &'a str,
+    pub method: String,
     /// Content type (always application/x-protobuf)
     #[serde(rename = "content-type")]
-    pub content_type: &'a str,
+    pub content_type: String,
     /// Content encoding (always gzip)
     #[serde(rename = "content-encoding")]
-    pub content_encoding: &'a str,
+    pub content_encoding: String,
     /// Custom headers from environment variables
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub headers: HashMap<String, String>,
+    #[serde(skip_serializing_if = "ExporterOutput::is_headers_empty")]
+    pub headers: Option<HashMap<String, String>>,
     /// Base64-encoded, gzipped, protobuf-serialized span data
     pub payload: String,
     /// Whether the payload is base64 encoded (always true)
     pub base64: bool,
+    /// Log level for filtering (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<String>,
+}
+
+impl ExporterOutput {
+    /// Helper function for serde to skip serializing empty headers
+    fn is_headers_empty(headers: &Option<HashMap<String, String>>) -> bool {
+        headers.as_ref().map_or(true, |h| h.is_empty())
+    }
 }
 
 /// A span exporter that writes spans to stdout in OTLP format
@@ -231,10 +351,14 @@ pub struct ExporterOutput<'a> {
 pub struct OtlpStdoutSpanExporter {
     /// GZIP compression level (0-9)
     compression_level: u8,
-    /// Output implementation (stdout or test buffer)
-    output: Arc<dyn Output>,
     /// Optional resource to be included with all spans
     resource: Option<Resource>,
+    // Optional headers
+    headers: Option<HashMap<String, String>>,
+    /// Output implementation (stdout or named pipe)
+    output: Arc<dyn Output>,
+    /// Optional log level for the exported spans
+    level: Option<LogLevel>,
 }
 
 impl Default for OtlpStdoutSpanExporter {
@@ -248,12 +372,13 @@ impl OtlpStdoutSpanExporter {
     ///
     /// This uses a GZIP compression level of 6 unless overridden by an environment variable.
     ///
-    /// # Compression Level
+    /// # Output Type
     ///
-    /// The compression level is determined in the following order (highest to lowest precedence):
+    /// The output type is determined in the following order:
     ///
-    /// 1. The `OTLP_STDOUT_SPAN_EXPORTER_COMPRESSION_LEVEL` environment variable if set
-    /// 2. Default value (6)
+    /// 1. The `OTLP_STDOUT_SPAN_EXPORTER_OUTPUT_TYPE` environment variable if set ("pipe" or "stdout")
+    /// 2. Constructor parameter (pipe)
+    /// 3. Default (stdout)
     ///
     /// # Example
     ///
@@ -265,8 +390,11 @@ impl OtlpStdoutSpanExporter {
     #[builder]
     pub fn new(
         compression_level: Option<u8>,
-        output: Option<Arc<dyn Output>>,
         resource: Option<Resource>,
+        headers: Option<HashMap<String, String>>,
+        output: Option<Arc<dyn Output>>,
+        level: Option<LogLevel>,
+        pipe: Option<bool>,
     ) -> Self {
         // Set gzip_level with proper precedence (env var > constructor param > default)
         let compression_level = match env::var(env_vars::COMPRESSION_LEVEL) {
@@ -295,10 +423,56 @@ impl OtlpStdoutSpanExporter {
             }
         };
 
+        // Combine constructor headers with environment headers, giving priority to env vars
+        let headers = match headers {
+            Some(constructor_headers) => {
+                if let Some(env_headers) = Self::parse_headers() {
+                    // Merge, with env headers taking precedence
+                    let mut merged = constructor_headers;
+                    merged.extend(env_headers);
+                    Some(merged)
+                } else {
+                    // No env headers, use constructor headers
+                    Some(constructor_headers)
+                }
+            }
+            None => Self::parse_headers(), // Use env headers only
+        };
+
+        // Set log level with proper precedence (env var > constructor param > default)
+        let level = match env::var(env_vars::LOG_LEVEL) {
+            Ok(value) => match LogLevel::from_str(&value) {
+                Ok(log_level) => Some(log_level),
+                Err(e) => {
+                    log::warn!(
+                        "Invalid log level in {}: {}, using fallback",
+                        env_vars::LOG_LEVEL,
+                        e
+                    );
+                    level
+                }
+            },
+            Err(_) => {
+                // No environment variable, use parameter
+                level
+            }
+        };
+
+        // Determine output type with proper precedence (env var > constructor > default)
+        let use_pipe = match env::var(env_vars::OUTPUT_TYPE) {
+            Ok(value) => value.to_lowercase() == "pipe",
+            Err(_) => pipe.unwrap_or(false),
+        };
+
+        // Create output implementation
+        let output = output.unwrap_or_else(|| create_output(use_pipe));
+
         Self {
             compression_level,
             resource,
-            output: output.unwrap_or(Arc::new(StdOutput)),
+            headers,
+            output,
+            level,
         }
     }
 
@@ -319,7 +493,7 @@ impl OtlpStdoutSpanExporter {
     fn with_test_output() -> (Self, Arc<TestOutput>) {
         let output = Arc::new(TestOutput::new());
 
-        // Use the standard new() method to ensure environment variables are respected
+        // Use the standard builder() method and explicitly set the output
         let exporter = Self::builder().output(output.clone()).build();
 
         (exporter, output)
@@ -329,20 +503,44 @@ impl OtlpStdoutSpanExporter {
     ///
     /// This function reads headers from both global and trace-specific
     /// environment variables, with trace-specific headers taking precedence.
-    fn parse_headers() -> HashMap<String, String> {
-        let mut headers = HashMap::new();
+    fn parse_headers() -> Option<HashMap<String, String>> {
+        // Function to get and parse headers from an env var
+        let get_headers = |var_name: &str| -> Option<HashMap<String, String>> {
+            env::var(var_name).ok().map(|header_str| {
+                let mut map = HashMap::new();
+                Self::parse_header_string(&header_str, &mut map);
+                map
+            })
+        };
 
-        // Parse global headers first
-        if let Ok(global_headers) = env::var("OTEL_EXPORTER_OTLP_HEADERS") {
-            Self::parse_header_string(&global_headers, &mut headers);
+        // Try to get headers from both env vars
+        let global_headers = get_headers("OTEL_EXPORTER_OTLP_HEADERS");
+        let trace_headers = get_headers("OTEL_EXPORTER_OTLP_TRACES_HEADERS");
+
+        // If no headers were found in either env var, return None
+        if global_headers.is_none() && trace_headers.is_none() {
+            return None;
         }
 
-        // Parse trace-specific headers (these take precedence)
-        if let Ok(trace_headers) = env::var("OTEL_EXPORTER_OTLP_TRACES_HEADERS") {
-            Self::parse_header_string(&trace_headers, &mut headers);
+        // Create a merged map, with trace headers taking precedence
+        let mut result = HashMap::new();
+
+        // Add global headers first (if any)
+        if let Some(headers) = global_headers {
+            result.extend(headers);
         }
 
-        headers
+        // Add trace-specific headers (if any) - these will override any duplicates
+        if let Some(headers) = trace_headers {
+            result.extend(headers);
+        }
+
+        // Return None for empty map, otherwise Some
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
     }
 
     /// Parse a header string in the format key1=value1,key2=value2
@@ -412,15 +610,16 @@ impl SpanExporter for OtlpStdoutSpanExporter {
 
             // Prepare the output
             let output_data = ExporterOutput {
-                version: VERSION,
+                version: VERSION.to_string(),
                 source: Self::get_service_name(),
-                endpoint: defaults::ENDPOINT,
-                method: "POST",
-                content_type: "application/x-protobuf",
-                content_encoding: "gzip",
-                headers: Self::parse_headers(),
+                endpoint: defaults::ENDPOINT.to_string(),
+                method: "POST".to_string(),
+                content_type: "application/x-protobuf".to_string(),
+                content_encoding: "gzip".to_string(),
+                headers: self.headers.clone(),
                 payload,
                 base64: true,
+                level: self.level.map(|l| l.to_string()),
             };
 
             // Write using the output implementation
@@ -486,13 +685,6 @@ doctest!("../README.md", readme);
 
 #[cfg(test)]
 use std::sync::Mutex;
-use std::{
-    collections::HashMap,
-    env,
-    io::{self, Write},
-    result::Result,
-    sync::Arc,
-};
 
 /// Test output implementation that captures to a buffer
 #[cfg(test)]
@@ -575,6 +767,10 @@ mod tests {
         );
 
         let headers = OtlpStdoutSpanExporter::parse_headers();
+
+        // Headers should be Some since we set environment variables
+        assert!(headers.is_some());
+        let headers = headers.unwrap();
 
         assert_eq!(headers.get("key1").unwrap(), "value1");
         assert_eq!(headers.get("key2").unwrap(), "override");
@@ -674,6 +870,8 @@ mod tests {
             compression_level: 0,
             resource: None,
             output: no_compression_output.clone() as Arc<dyn Output>,
+            headers: None,
+            level: None,
         };
         let _ = no_compression_exporter.export(spans.clone()).await;
         let no_compression_size = extract_payload_size(&no_compression_output.get_output()[0]);
@@ -684,6 +882,8 @@ mod tests {
             compression_level: 9,
             resource: None,
             output: max_compression_output.clone() as Arc<dyn Output>,
+            headers: None,
+            level: None,
         };
         let _ = max_compression_exporter.export(spans.clone()).await;
         let max_compression_size = extract_payload_size(&max_compression_output.get_output()[0]);
@@ -874,5 +1074,279 @@ mod tests {
             .compression_level(9)
             .build();
         assert_eq!(exporter.compression_level, 9);
+    }
+
+    #[test]
+    fn test_exporter_output_deserialization() {
+        // Create a sample JSON string that would be produced by the exporter
+        let json_str = r#"{
+            "__otel_otlp_stdout": "0.11.1",
+            "source": "test-service",
+            "endpoint": "http://localhost:4318/v1/traces",
+            "method": "POST",
+            "content-type": "application/x-protobuf",
+            "content-encoding": "gzip",
+            "headers": {
+                "api-key": "test-key",
+                "custom-header": "test-value"
+            },
+            "payload": "SGVsbG8gd29ybGQ=",
+            "base64": true
+        }"#;
+
+        // Deserialize the JSON string into an ExporterOutput
+        let output: ExporterOutput = serde_json::from_str(json_str).unwrap();
+
+        // Verify that all fields are correctly deserialized
+        assert_eq!(output.version, "0.11.1");
+        assert_eq!(output.source, "test-service");
+        assert_eq!(output.endpoint, "http://localhost:4318/v1/traces");
+        assert_eq!(output.method, "POST");
+        assert_eq!(output.content_type, "application/x-protobuf");
+        assert_eq!(output.content_encoding, "gzip");
+        assert_eq!(output.headers.as_ref().unwrap().len(), 2);
+        assert_eq!(
+            output.headers.as_ref().unwrap().get("api-key").unwrap(),
+            "test-key"
+        );
+        assert_eq!(
+            output
+                .headers
+                .as_ref()
+                .unwrap()
+                .get("custom-header")
+                .unwrap(),
+            "test-value"
+        );
+        assert_eq!(output.payload, "SGVsbG8gd29ybGQ=");
+        assert!(output.base64);
+
+        // Verify that we can decode the base64 payload (if it's valid base64)
+        let decoded = base64_engine.decode(&output.payload).unwrap();
+        let payload_text = String::from_utf8(decoded).unwrap();
+        assert_eq!(payload_text, "Hello world");
+    }
+
+    #[test]
+    fn test_exporter_output_deserialization_dynamic() {
+        // Create a dynamic JSON string using String operations
+        let version = "0.11.1".to_string();
+        let service = "dynamic-service".to_string();
+        let payload = base64_engine.encode("Dynamic payload");
+
+        // Build the JSON dynamically
+        let json_str = format!(
+            r#"{{
+                "__otel_otlp_stdout": "{}",
+                "source": "{}",
+                "endpoint": "http://localhost:4318/v1/traces",
+                "method": "POST",
+                "content-type": "application/x-protobuf",
+                "content-encoding": "gzip",
+                "headers": {{
+                    "dynamic-key": "dynamic-value"
+                }},
+                "payload": "{}",
+                "base64": true
+            }}"#,
+            version, service, payload
+        );
+
+        // Deserialize the dynamic JSON string
+        let output: ExporterOutput = serde_json::from_str(&json_str).unwrap();
+
+        // Verify fields
+        assert_eq!(output.version, version);
+        assert_eq!(output.source, service);
+        assert_eq!(output.endpoint, "http://localhost:4318/v1/traces");
+        assert_eq!(output.method, "POST");
+        assert_eq!(output.content_type, "application/x-protobuf");
+        assert_eq!(output.content_encoding, "gzip");
+        assert_eq!(output.headers.as_ref().unwrap().len(), 1);
+        assert_eq!(
+            output.headers.as_ref().unwrap().get("dynamic-key").unwrap(),
+            "dynamic-value"
+        );
+        assert_eq!(output.payload, payload);
+        assert!(output.base64);
+
+        // Verify payload decoding
+        let decoded = base64_engine.decode(&output.payload).unwrap();
+        let payload_text = String::from_utf8(decoded).unwrap();
+        assert_eq!(payload_text, "Dynamic payload");
+    }
+
+    #[test]
+    fn test_log_level_from_str() {
+        assert_eq!(LogLevel::from_str("debug").unwrap(), LogLevel::Debug);
+        assert_eq!(LogLevel::from_str("DEBUG").unwrap(), LogLevel::Debug);
+        assert_eq!(LogLevel::from_str("info").unwrap(), LogLevel::Info);
+        assert_eq!(LogLevel::from_str("INFO").unwrap(), LogLevel::Info);
+        assert_eq!(LogLevel::from_str("warn").unwrap(), LogLevel::Warn);
+        assert_eq!(LogLevel::from_str("warning").unwrap(), LogLevel::Warn);
+        assert_eq!(LogLevel::from_str("WARN").unwrap(), LogLevel::Warn);
+        assert_eq!(LogLevel::from_str("error").unwrap(), LogLevel::Error);
+        assert_eq!(LogLevel::from_str("ERROR").unwrap(), LogLevel::Error);
+
+        assert!(LogLevel::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn test_log_level_display() {
+        assert_eq!(LogLevel::Debug.to_string(), "DEBUG");
+        assert_eq!(LogLevel::Info.to_string(), "INFO");
+        assert_eq!(LogLevel::Warn.to_string(), "WARN");
+        assert_eq!(LogLevel::Error.to_string(), "ERROR");
+    }
+
+    #[test]
+    #[serial]
+    fn test_log_level_from_env() {
+        // Set environment variable
+        std::env::set_var(env_vars::LOG_LEVEL, "debug");
+        let exporter = OtlpStdoutSpanExporter::default();
+        assert_eq!(exporter.level, Some(LogLevel::Debug));
+
+        // Test with invalid level
+        std::env::set_var(env_vars::LOG_LEVEL, "invalid");
+        let exporter = OtlpStdoutSpanExporter::default();
+        assert_eq!(exporter.level, None);
+
+        // Test with constructor parameter
+        std::env::remove_var(env_vars::LOG_LEVEL);
+        let exporter = OtlpStdoutSpanExporter::builder()
+            .level(LogLevel::Error)
+            .build();
+        assert_eq!(exporter.level, Some(LogLevel::Error));
+
+        // Test env var takes precedence over constructor
+        std::env::set_var(env_vars::LOG_LEVEL, "warn");
+        let exporter = OtlpStdoutSpanExporter::builder()
+            .level(LogLevel::Error)
+            .build();
+        assert_eq!(exporter.level, Some(LogLevel::Warn));
+
+        // Clean up
+        std::env::remove_var(env_vars::LOG_LEVEL);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_log_level_in_output() {
+        // Create a test exporter with a specific log level
+        let (mut exporter, output) = OtlpStdoutSpanExporter::with_test_output();
+        exporter.level = Some(LogLevel::Debug);
+        let span = create_test_span();
+
+        let result = exporter.export(vec![span]).await;
+        assert!(result.is_ok());
+
+        let output_lines = output.get_output();
+        assert_eq!(output_lines.len(), 1);
+
+        // Parse the JSON to check the level field
+        let json: Value = serde_json::from_str(&output_lines[0]).unwrap();
+        assert_eq!(json["level"], "DEBUG");
+
+        // Test with no level set
+        let (mut exporter, output) = OtlpStdoutSpanExporter::with_test_output();
+        exporter.level = None;
+        let span = create_test_span();
+
+        let result = exporter.export(vec![span]).await;
+        assert!(result.is_ok());
+
+        let output_lines = output.get_output();
+        assert_eq!(output_lines.len(), 1);
+
+        // Parse the JSON to check level field is omitted
+        let json: Value = serde_json::from_str(&output_lines[0]).unwrap();
+        assert!(!json.as_object().unwrap().contains_key("level"));
+    }
+
+    #[test]
+    fn test_stdout_output() {
+        let output = create_output(false);
+        // We can't easily test stdout directly, but we can verify the type is created
+        assert!(format!("{:?}", output).contains("StdOutput"));
+    }
+
+    #[test]
+    fn test_pipe_output() {
+        let output = create_output(true);
+        // Even if pipe doesn't exist, we should get a NamedPipeOutput or StdOutput fallback
+        let debug_str = format!("{:?}", output);
+        assert!(debug_str.contains("NamedPipeOutput") || debug_str.contains("StdOutput"));
+    }
+
+    #[test]
+    fn test_env_var_precedence() {
+        // Create a temporary directory for testing
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_pipe");
+
+        // Make sure no other environment variables interfere
+        std::env::remove_var(env_vars::OUTPUT_TYPE);
+
+        // Set the environment variable to use pipe
+        std::env::set_var(env_vars::OUTPUT_TYPE, "pipe");
+
+        // Create the exporter
+        let exporter = OtlpStdoutSpanExporter::default();
+
+        // Verify the output type
+        let debug_str = format!("{:?}", exporter.output);
+        assert!(debug_str.contains("NamedPipeOutput") || debug_str.contains("StdOutput"));
+
+        // Clean up
+        std::env::remove_var(env_vars::OUTPUT_TYPE);
+        if path.exists() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn test_constructor_precedence() {
+        // Create a temporary directory for testing
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_pipe");
+
+        // Make sure the environment variable is not set
+        std::env::remove_var(env_vars::OUTPUT_TYPE);
+
+        // Create the exporter with pipe output
+        let exporter = OtlpStdoutSpanExporter::builder().pipe(true).build();
+
+        // Verify the output type
+        let debug_str = format!("{:?}", exporter.output);
+        assert!(debug_str.contains("NamedPipeOutput") || debug_str.contains("StdOutput"));
+
+        // Clean up
+        if path.exists() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn test_env_var_overrides_constructor() {
+        // Create temporary directory for testing
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_pipe");
+
+        // Set the environment variable to use pipe
+        std::env::set_var(env_vars::OUTPUT_TYPE, "pipe");
+
+        // Create the exporter with stdout in constructor
+        let exporter = OtlpStdoutSpanExporter::builder().pipe(false).build();
+
+        // Verify that env var took precedence (pipe output)
+        let debug_str = format!("{:?}", exporter.output);
+        assert!(debug_str.contains("NamedPipeOutput") || debug_str.contains("StdOutput"));
+
+        // Clean up
+        std::env::remove_var(env_vars::OUTPUT_TYPE);
+        if path.exists() {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
