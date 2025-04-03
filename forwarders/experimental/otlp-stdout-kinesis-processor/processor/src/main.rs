@@ -21,7 +21,7 @@ use std::sync::Arc;
 use aws_credential_types::provider::ProvideCredentials;
 use otlp_sigv4_client::SigV4ClientBuilder;
 use otlp_stdout_span_exporter::ExporterOutput;
-use serverless_otlp_forwarder::{
+use otlp_stdout_logs_processor::{
     collectors::Collectors,
     processing::process_telemetry_batch,
     span_compactor::{compact_telemetry_payloads, SpanCompactionConfig},

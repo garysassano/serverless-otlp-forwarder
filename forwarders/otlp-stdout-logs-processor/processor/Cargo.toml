@@ -1,5 +1,5 @@
 [package]
-name = "serverless-otlp-forwarder"
+name = "otlp-stdout-logs-processor"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

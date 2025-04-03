@@ -28,6 +28,7 @@ lambda-lw-http-router-core = { path = "packages/rust/lambda-lw-http-router/route
 lambda-lw-http-router-macro = { path = "packages/rust/lambda-lw-http-router/router-macro" }
 otlp-stdout-span-exporter = { path = "packages/rust/otlp-stdout-span-exporter" }
 lambda-otel-lite = { path = "packages/rust/lambda-otel-lite" }
+otlp-stdout-logs-processor = { path = "forwarders/otlp-stdout-logs-processor/processor" }
 
 # Runtime and async
 tokio = { version = "1", features = ["full"] }

@@ -7,7 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-serverless-otlp-forwarder.workspace = true
+otlp-stdout-logs-processor.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 lambda_runtime.workspace = true
