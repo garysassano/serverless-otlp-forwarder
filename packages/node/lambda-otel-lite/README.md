@@ -47,7 +47,7 @@ By leveraging Lambda's execution lifecycle and providing multiple processing mod
 - **Lambda Extension Integration**: Built-in extension for efficient telemetry export
 - **Efficient Memory Usage**: Fixed-size queue to prevent memory growth
 - **AWS Event Support**: Automatic extraction of attributes from common AWS event types (API Gateway v1/v2, ALB)
-- **Flexible Context Propagation**: Support for W3C Trace Context
+- **Flexible Context Propagation**: Support for W3C Trace Context, AWS X-Ray, and custom propagators. Now supports configuration via the `OTEL_PROPAGATORS` environment variable (comma-separated list: `tracecontext`, `xray`, `xray-lambda`, `none`).
 
 ## Architecture and Modules
 
@@ -91,6 +91,9 @@ graph TD
 # Install the base package
 npm install --save @dev7a/lambda-otel-lite
 
+# Recommended for type safety with event handlers:
+npm install --save-dev @types/aws-lambda
+
 # Optional: For OTLP HTTP export support
 npm install --save @opentelemetry/exporter-trace-otlp-http
 ```
@@ -101,12 +104,14 @@ npm install --save @opentelemetry/exporter-trace-otlp-http
 import { trace, StatusCode } from '@opentelemetry/api';
 import { initTelemetry, createTracedHandler } from '@dev7a/lambda-otel-lite';
 import { apiGatewayV2Extractor } from '@dev7a/lambda-otel-lite/extractors';
+import type { APIGatewayProxyEventV2, Context } from 'aws-lambda'; // Import types
 
 // Initialize telemetry once, outside the handler
 const { tracer, completionHandler } = initTelemetry();
 
 // Create traced handler with specific extractor
-const traced = createTracedHandler(
+// You can explicitly specify the event and result types for better type safety
+const traced = createTracedHandler<APIGatewayProxyEventV2, APIGatewayProxyResultV2>(
   'my-api-handler',
   completionHandler,
   apiGatewayV2Extractor
@@ -118,8 +123,8 @@ async function processUser(userId) {
   return { name: 'User Name', id: userId };
 }
 
-// Create the Lambda handler
-export const handler = traced(async (event, context) => {
+// Create the Lambda handler with types
+export const handler = traced(async (event: APIGatewayProxyEventV2, context: Context) => {
   try {
     // Get current span to add custom attributes
     const currentSpan = trace.getActiveSpan();
@@ -277,6 +282,14 @@ You can provide multiple span processors, and they will all be used to process s
 
 ### Custom configuration with context propagators
 
+You can now also configure context propagation using the `OTEL_PROPAGATORS` environment variable, which takes precedence over the `propagators` option. Supported values: `tracecontext`, `xray`, `xray-lambda`, `none` (comma-separated for multiple). For example:
+
+```bash
+export OTEL_PROPAGATORS="xray,tracecontext"
+```
+
+If neither the environment variable nor the option is set, the default is `[LambdaXRayPropagator(), W3CTraceContextPropagator()]`.
+
 ```typescript
 import { initTelemetry } from '@dev7a/lambda-otel-lite';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
@@ -362,7 +375,7 @@ The library automatically sets relevant FAAS attributes based on the Lambda cont
   - `http.target`: from path
   - `http.scheme`: from protocol
 
-The library automatically detects API Gateway v1 and v2 events and sets the appropriate HTTP attributes. For HTTP responses, the status code is automatically extracted from the handler's response and set as `http.status_code`. For 5xx responses, the span status is set to ERROR.
+The library automatically detects API Gateway v1 and v2 events and sets the appropriate HTTP attributes. For HTTP responses, the status code is automatically extracted from the handler's response and set as `http.status_code`. For 5xx responses, the span status is set to ERROR. For improved type safety when using these extractors, it's recommended to install `@types/aws-lambda` as a dev dependency and type your handler's `event` and `context` parameters accordingly.
 
 ### Built-in Extractors
 
@@ -405,8 +418,10 @@ export const traced = createTracedHandler(
     apiGatewayV1Extractor
 );
 
-export const handler = traced(async (event, context) => {
-    // Your handler code
+import type { APIGatewayProxyEvent, Context } from 'aws-lambda'; // Import types
+
+export const handler = traced(async (event: APIGatewayProxyEvent, context: Context) => {
+    // Your handler code using typed event and context
     return {
         statusCode: 200,
         body: JSON.stringify({ message: 'Hello, world!' })
@@ -419,26 +434,52 @@ export const handler = traced(async (event, context) => {
 You can create custom extractors for event types not directly supported by the library by implementing the extractor interface:
 
 ```typescript
-import { SpanAttributes, TriggerType } from '@dev7a/lambda-otel-lite/types';
+// Import types from the main package or extractors path
+import { type AttributesExtractor } from '@dev7a/lambda-otel-lite'; // Import from main package
+import { type SpanAttributes, TriggerType } from '@dev7a/lambda-otel-lite/extractors';
+import type { SQSEvent, Context } from 'aws-lambda';
 
-const customExtractor = (event, context): SpanAttributes => ({
-    trigger: TriggerType.OTHER,  // Or any custom string
-    attributes: {
-        'custom.attribute': 'value',
-        // ... other attributes
-    },
-    spanName: 'custom-operation',  // Optional
-    carrier: event?.headers,  // Optional: For context propagation
-});
+// Example for an SQS event with proper typing
+const customSqsExtractor: AttributesExtractor<SQSEvent> = (event, context) => {
+    const attributes = {
+        'messaging.system': 'AmazonSQS',
+        'messaging.operation': 'process',
+        'messaging.source.kind': 'queue',
+        // Extract message count or other relevant attributes
+        'messaging.message.count': event.Records?.length || 0,
+    };
 
-export const traced = createTracedHandler(
+    // Example: Extract trace context from the first message's attributes if available
+    const firstRecordAttributes = event.Records?.[0]?.messageAttributes;
+    const carrier = firstRecordAttributes ?
+        Object.entries(firstRecordAttributes).reduce((acc, [key, value]) => {
+            if (value.stringValue) {
+                acc[key.toLowerCase()] = value.stringValue; // Normalize keys
+            }
+            return acc;
+        }, {} as Record<string, string>)
+        : undefined;
+
+    return {
+        trigger: TriggerType.Messaging, // Use appropriate trigger type
+        attributes,
+        spanName: 'process-sqs-message', // Optional custom span name
+        carrier, // Optional carrier for context propagation
+    };
+};
+
+// Create a traced handler with explicit type parameters
+export const traced = createTracedHandler<SQSEvent, any>(
     'custom-handler',
     completionHandler,
-    customExtractor
+    customSqsExtractor
 );
 
-export const handler = traced(async (event, context) => {
-    // Your handler code
+import type { SQSEvent, Context } from 'aws-lambda'; // Import types
+
+// The handler function with proper typing
+export const handler = traced(async (event: SQSEvent, context: Context) => {
+    // Your handler code using typed event and context
     return {
         statusCode: 200,
         body: JSON.stringify({ message: 'Hello, world!' })
@@ -448,10 +489,11 @@ export const handler = traced(async (event, context) => {
 
 The `SpanAttributes` object returned by the extractor contains:
 
-- `trigger`: The type of trigger (HTTP, SQS, etc.) - affects how spans are named
-- `attributes`: An attributes object to add to the span
-- `spanName`: Optional custom name for the span (defaults to handler name)
-- `carrier`: Optional object containing trace context headers for propagation
+- `trigger`: The type of trigger (e.g., `TriggerType.Http`, `TriggerType.Messaging`, `TriggerType.Other` or a custom string) - affects how spans are named. Use `TriggerType` enum imported from `@dev7a/lambda-otel-lite/extractors`.
+- `attributes`: An object containing key-value pairs to add as attributes to the main handler span.
+- `spanName`: Optional custom name for the main handler span (defaults to the handler name provided to `createTracedHandler`).
+- `carrier`: Optional object containing trace context headers (e.g., `traceparent`, `tracestate`, `x-amzn-trace-id`). Keys should be lowercase. This is used for extracting the parent span context.
+- `kind`: Optional `SpanKind` (defaults to `SpanKind.SERVER`). Import `SpanKind` from `@opentelemetry/api`.
 
 
 ## Environment Variables
@@ -493,7 +535,7 @@ The following AWS Lambda environment variables are automatically used for resour
 - `AWS_LAMBDA_FUNCTION_VERSION`: Function version
 - `AWS_LAMBDA_LOG_STREAM_NAME`: Log stream name
 - `AWS_LAMBDA_FUNCTION_MEMORY_SIZE`: Function memory size
-
+- `OTEL_PROPAGATORS`: Comma-separated list of propagators to use for context propagation. Supported: `tracecontext`, `xray`, `xray-lambda`, `none`. Takes precedence over programmatic configuration.
 
 ## License
 
