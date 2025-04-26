@@ -11,6 +11,7 @@ use prettytable::{format, row, Table};
 use prost::Message;
 use std::collections::HashMap;
 use terminal_size::{self, Width, Height};
+use crate::cli::ColoringMode;
 use crate::processing::TelemetryData; // Need TelemetryData for display_console
 
 // Constants
@@ -160,6 +161,17 @@ impl Theme {
         palette[service_hash % palette.len()]
     }
 
+    // Get a color for a span based on its ID hash
+    pub fn get_color_for_span(&self, span_id: &str) -> (u8, u8, u8) {
+        // Use a different hashing approach for span IDs to avoid collisions with service names
+        let mut span_hash: usize = 5381; // Initial prime
+        for c in span_id.chars() {
+            span_hash = span_hash.wrapping_add(c as usize).wrapping_mul(33); // Basic multiplicative hash
+        }
+        let palette = self.get_palette();
+        palette[span_hash % palette.len()]
+    }
+
     // Helper method to check if a theme name is valid
     pub fn is_valid_theme(theme_name: &str) -> bool {
         matches!(
@@ -214,9 +226,10 @@ pub fn display_console(
     event_severity_attribute_name: &str,
     theme: Theme,
     span_attr_globs: &Option<GlobSet>,
+    color_by: ColoringMode,
 ) -> Result<()> {
-    // Debug logging with theme
-    tracing::debug!("Display console called with theme={:?}", theme);
+    // Debug logging with theme and coloring mode
+    tracing::debug!("Display console called with theme={:?}, color_by={:?}", theme, color_by);
 
     let mut spans_with_service: Vec<(Span, String)> = Vec::new();
 
@@ -434,6 +447,7 @@ pub fn display_console(
                 theme,
                 &span_map,
                 span_attr_globs,
+                color_by,
             )?;
         }
         table.printstd();
@@ -472,20 +486,25 @@ pub fn display_console(
                     }
                 }
 
-                // Get color based on theme and service name
-                let color = theme.get_color_for_service(&event.service_name);
-                let (r, g, b) = color;
+                // Get service color always for consistent service name display
+                let service_color = theme.get_color_for_service(&event.service_name);
+                
+                // Get color for span ID display based on coloring mode
+                let (prefix_r, prefix_g, prefix_b) = match color_by {
+                    ColoringMode::Service => service_color,
+                    ColoringMode::Span => theme.get_color_for_span(&event.span_id),
+                };
 
                 // Shorten span ID for display
                 let span_id_prefix = event.span_id.chars().take(8).collect::<String>();
                 
-                // Apply service color to span ID prefix unless it's an error
+                // Apply appropriate color to span ID prefix unless it's an error
                 let colored_span_id_prefix = if event.is_error {
                     span_id_prefix
                         .truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2)
                         .to_string()
                 } else {
-                    span_id_prefix.truecolor(r, g, b).to_string()
+                    span_id_prefix.truecolor(prefix_r, prefix_g, prefix_b).to_string()
                 };
 
                 // Color the level based on its value
@@ -502,7 +521,7 @@ pub fn display_console(
                     "{} {} [{}] [{}] {}",
                     formatted_time.bright_black(),
                     colored_span_id_prefix,
-                    event.service_name.truecolor(r, g, b), // Use service-specific color
+                    event.service_name.truecolor(service_color.0, service_color.1, service_color.2), // Always use service color for service name
                     colored_level,
                     event.name,
                 );
@@ -605,11 +624,15 @@ fn add_span_to_table(
     theme: Theme,
     span_map: &HashMap<String, Span>,
     span_attr_globs: &Option<GlobSet>,
+    color_by: ColoringMode,
 ) -> Result<()> {
     let indent = "  ".repeat(depth);
 
-    // Get color for timeline bar only
-    let (r, g, b) = theme.get_color_for_service(&node.service_name);
+    // Get color based on the coloring mode
+    let (r, g, b) = match color_by {
+        ColoringMode::Service => theme.get_color_for_service(&node.service_name),
+        ColoringMode::Span => theme.get_color_for_span(&node.id),
+    };
 
     // --- Create Uncolored Cell Content ---
     let service_name_content = node
@@ -716,6 +739,7 @@ fn add_span_to_table(
             theme,
             span_map,
             span_attr_globs,
+            color_by,
         )?;
     }
 

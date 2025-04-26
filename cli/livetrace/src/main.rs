@@ -25,7 +25,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 // Internal Crate Imports
 use crate::aws_setup::setup_aws_resources;
-use crate::cli::{parse_event_attr_globs, CliArgs};
+use crate::cli::{parse_event_attr_globs, CliArgs, ColoringMode};
 use crate::config::{load_and_resolve_config, save_profile_config, EffectiveConfig, ProfileConfig};
 use crate::console_display::{display_console, Theme, get_terminal_width};
 use crate::forwarder::{parse_otlp_headers_from_vec, send_batch};
@@ -86,6 +86,7 @@ async fn main() -> Result<()> {
             verbose: args.verbose,
             theme: args.theme.clone(),
             span_attrs: args.span_attrs.clone(),
+            color_by: args.color_by,
         }
     };
 
@@ -176,6 +177,7 @@ async fn main() -> Result<()> {
         theme: "default".to_string(),
         list_themes: false,
         span_attrs: None,
+        color_by: ColoringMode::Service,
     };
     let aws_result = setup_aws_resources(&aws_setup_args).await?;
     let cwl_client = aws_result.cwl_client;
@@ -231,10 +233,10 @@ async fn main() -> Result<()> {
     
     // Operation Mode
     if let Some(poll_secs) = config.poll_interval {
-        println!("  {:<18}: {}", "Mode".dimmed(), "Polling");
+        println!("  {:<18}: Polling", "Mode".dimmed());
         println!("  {:<18}: {} seconds", "Poll Interval".dimmed(), poll_secs);
     } else {
-        println!("  {:<18}: {}", "Mode".dimmed(), "Live Tail");
+        println!("  {:<18}: Live Tail", "Mode".dimmed());
         println!("  {:<18}: {} minutes", "Session Timeout".dimmed(), config.session_timeout);
     }
     
@@ -243,7 +245,7 @@ async fn main() -> Result<()> {
     if let Some(endpoint) = &resolved_endpoint {
         println!("  {:<18}: {}", "OTLP Endpoint".dimmed(), endpoint);
     } else {
-        println!("  {:<18}: {}", "OTLP Endpoint".dimmed(), "Not configured");
+        println!("  {:<18}: Not configured", "OTLP Endpoint".dimmed());
     }
     if !resolved_headers_vec.is_empty() {
         println!("  {:<18}: {} headers", "OTLP Headers".dimmed(), resolved_headers_vec.len());
@@ -252,10 +254,14 @@ async fn main() -> Result<()> {
     // Display Settings
     println!("  {:<18}: {}", "Theme".dimmed(), config.theme);
     println!("  {:<18}: {}", "Compact Display".dimmed(), if config.compact_display { "Yes" } else { "No" });
+    println!("  {:<18}: {}", "Color By".dimmed(), match config.color_by {
+        ColoringMode::Service => "Service",
+        ColoringMode::Span => "Span ID",
+    });
     if let Some(attrs) = &config.event_attrs {
         println!("  {:<18}: {}", "Event Attributes".dimmed(), attrs);
     } else {
-        println!("  {:<18}: {}", "Event Attributes".dimmed(), "All");
+        println!("  {:<18}: All", "Event Attributes".dimmed());
     }
     println!("  {:<18}: {}", "Severity Attr".dimmed(), config.event_severity_attribute);
     
@@ -279,7 +285,7 @@ async fn main() -> Result<()> {
     println!();
     let validated_log_group_names_for_display: Vec<String> = resolved_log_group_arns
         .iter()
-        .map(|arn| arn.split(':').last().unwrap_or("unknown-name").to_string())
+        .map(|arn| arn.split(':').next_back().unwrap_or("unknown-name").to_string())
         .collect();
     print!(
         "  {:<18}: ",
@@ -387,6 +393,7 @@ async fn main() -> Result<()> {
                                 config.event_severity_attribute.as_str(),
                                 theme,
                                 &span_attr_globs,
+                                config.color_by,
                             ) {
                                 tracing::error!(error = %e, "Error displaying telemetry data");
                             }
@@ -431,6 +438,7 @@ async fn main() -> Result<()> {
                 &config.event_severity_attribute,
                 theme,
                 &span_attr_globs,
+                config.color_by,
             ) {
                 tracing::error!(error = %e, "Error displaying final telemetry data");
             }

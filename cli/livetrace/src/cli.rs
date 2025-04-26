@@ -1,6 +1,22 @@
 use crate::console_display::Theme;
-use clap::{builder::TypedValueParser, error::ErrorKind, ArgGroup, Parser};
+use clap::{builder::TypedValueParser, error::ErrorKind, ArgGroup, Parser, ValueEnum};
 use globset::{Glob, GlobSet, GlobSetBuilder};
+use serde::{Deserialize, Serialize};
+
+/// Defines coloring strategies for the console output
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+pub enum ColoringMode {
+    /// Color by service name (default)
+    Service,
+    /// Color by span ID
+    Span,
+}
+
+impl Default for ColoringMode {
+    fn default() -> Self {
+        ColoringMode::Service
+    }
+}
 
 /// livetrace: Tail CloudWatch Logs for OTLP/stdout traces and forward them.
 #[derive(Parser, Debug, Clone)] // Added Clone
@@ -100,6 +116,15 @@ pub struct CliArgs {
         conflicts_with = "theme",
     )]
     pub list_themes: bool,
+    
+    /// Color output by service name or span ID
+    #[arg(
+        long = "color-by",
+        value_enum,
+        default_value_t = ColoringMode::Service,
+        help_heading = "Display Options",
+    )]
+    pub color_by: ColoringMode,
 }
 
 // Create a custom value parser for themes

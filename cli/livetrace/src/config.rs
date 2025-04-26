@@ -1,4 +1,4 @@
-use crate::cli::CliArgs;
+use crate::cli::{CliArgs, ColoringMode};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, io::Write, path::Path};
@@ -58,6 +58,8 @@ pub struct ProfileConfig {
     pub theme: Option<String>,
     #[serde(rename = "span-attrs")]
     pub span_attrs: Option<String>,
+    #[serde(rename = "color-by", skip_serializing_if = "Option::is_none")]
+    pub color_by: Option<ColoringMode>,
 
     // --- Mode --- (Mirroring CliArgs groups)
     #[serde(rename = "poll-interval")]
@@ -88,6 +90,7 @@ pub struct EffectiveConfig {
     pub event_attrs: Option<String>,
     pub event_severity_attribute: String,
     pub span_attrs: Option<String>,
+    pub color_by: ColoringMode,
 
     // --- Mode ---
     pub poll_interval: Option<u64>,
@@ -129,6 +132,7 @@ impl ProfileConfig {
                 .filter(|s| s != "event.severity"), // Default
             monochrome: None, // No longer used, but kept for compatibility
             theme: Some(args.theme.clone()).filter(|s| s != "default"), // Default is "default"
+            color_by: Some(args.color_by).filter(|&c| c != ColoringMode::Service), // Default is Service
         }
     }
 }
@@ -156,6 +160,7 @@ pub fn load_and_resolve_config(
         verbose: 0,
         theme: "default".to_string(),
         span_attrs: None,
+        color_by: ColoringMode::Service,
     };
 
     // If no profile specified, just return CLI args as effective config
@@ -259,6 +264,7 @@ fn apply_cli_args_to_effective(cli_args: &CliArgs, effective: &mut EffectiveConf
     effective.session_timeout = cli_args.session_timeout;
     effective.verbose = cli_args.verbose;
     effective.theme = cli_args.theme.clone();
+    effective.color_by = cli_args.color_by;
 }
 
 // Remove the old placeholder:
@@ -394,6 +400,10 @@ fn apply_profile_to_effective(profile: &ProfileConfig, effective: &mut Effective
     if let Some(val) = &profile.span_attrs {
         effective.span_attrs = Some(val.clone());
     }
+    
+    if let Some(val) = profile.color_by {
+        effective.color_by = val;
+    }
 }
 
 #[cfg(test)]
@@ -424,6 +434,7 @@ mod tests {
             save_profile: None,
             theme: "test-theme".to_string(),
             list_themes: false,
+            color_by: ColoringMode::Service,
         }
     }
 
@@ -537,6 +548,7 @@ aws-region = "us-west-1"
             verbose: 0,
             theme: "default".to_string(),
             span_attrs: None,
+            color_by: ColoringMode::Service,
         };
 
         // Create a profile with some settings
@@ -556,6 +568,7 @@ aws-region = "us-west-1"
             monochrome: None,
             theme: Some("test-theme".to_string()),
             span_attrs: Some("profile-span-attrs".to_string()),
+            color_by: None,
         };
 
         // Apply the profile
@@ -621,6 +634,7 @@ aws-region = "us-west-1"
             verbose: args.verbose,
             theme: args.theme.clone(),
             span_attrs: None,
+            color_by: args.color_by,
         };
 
         // Apply global settings
