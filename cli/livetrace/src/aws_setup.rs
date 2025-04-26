@@ -83,22 +83,22 @@ pub async fn setup_aws_resources(args: &CliArgs) -> Result<AwsSetupResult> {
             format!("Stack '{}' contained 0 discoverable and valid LogGroup resources (checked Lambda@Edge variants).", args.stack_name.as_deref().unwrap_or("N/A"))
         } else {
             format!(
-                "Pattern '{}' matched 0 valid log groups (checked Lambda@Edge variants).",
-                args.log_group_pattern.as_deref().unwrap_or("N/A")
+                "Log Groups Patterns {:?} matched 0 valid log groups (checked Lambda@Edge variants).",
+                args.log_group_pattern.as_ref().map_or(vec!["N/A".to_string()], |v| v.to_vec())
             )
         };
         return Err(anyhow::anyhow!(error_msg));
     } else if group_count > 10 {
         let (method, value) = if let Some(stack) = args.stack_name.as_deref() {
-            ("Stack", stack)
+            ("Stack", stack.to_string())
         } else {
             (
-                "Pattern",
-                args.log_group_pattern.as_deref().unwrap_or("N/A"),
+                "Log Groups Patterns",
+                format!("{:?}", args.log_group_pattern.as_ref().map_or(vec!["N/A".to_string()], |v| v.to_vec())),
             )
         };
         let error_msg = format!(
-            "{} '{}' resulted in {} valid log groups (max 10 allowed for live tail). Found: {:?}",
+            "{} {} resulted in {} valid log groups (max 10 allowed for live tail). Found: {:?}",
             method, value, group_count, validated_log_group_names
         );
         return Err(anyhow::anyhow!(error_msg));
@@ -139,15 +139,87 @@ async fn discover_log_group_names(
     cwl_client: &CwlClient,
     args: &CliArgs,
 ) -> Result<Vec<String>> {
+    // Create a HashSet to collect all log groups and avoid duplicates
+    let mut all_log_groups = std::collections::HashSet::new();
+    
+    // Process stack name if provided
     if let Some(stack_name) = args.stack_name.as_deref() {
-        discover_log_groups_from_stack(cfn_client, stack_name).await
-    } else if let Some(pattern) = args.log_group_pattern.as_deref() {
-        discover_log_groups_by_pattern(cwl_client, pattern).await
-    } else {
-        Err(anyhow::anyhow!(
-            "Internal error: No log group pattern or stack name provided."
-        ))
+        let stack_groups = discover_log_groups_from_stack(cfn_client, stack_name).await?;
+        for group in stack_groups {
+            all_log_groups.insert(group);
+        }
     }
+    
+    // Process log group patterns if provided
+    if let Some(patterns) = &args.log_group_pattern {
+        if !patterns.is_empty() {
+            let pattern_groups = discover_log_groups_by_patterns(cwl_client, patterns).await?;
+            for group in pattern_groups {
+                all_log_groups.insert(group);
+            }
+        }
+    }
+    
+    // Return error if neither was provided or both were empty
+    if all_log_groups.is_empty() {
+        if args.stack_name.is_none() && args.log_group_pattern.is_none() {
+            return Err(anyhow::anyhow!(
+                "Internal error: No log group pattern or stack name provided."
+            ));
+        } else {
+            return Err(anyhow::anyhow!(
+                "No log groups found with the provided pattern(s) and/or stack name."
+            ));
+        }
+    }
+    
+    // Convert to Vec and return
+    Ok(all_log_groups.into_iter().collect())
+}
+
+/// Discovers log groups matching multiple patterns.
+async fn discover_log_groups_by_patterns(
+    cwl_client: &CwlClient,
+    patterns: &[String],
+) -> Result<Vec<String>> {
+    tracing::debug!("Discovering log groups matching patterns: {:?}", patterns);
+    
+    // Use a HashSet to avoid duplicates when multiple patterns match the same log group
+    let mut discovered_groups = std::collections::HashSet::new();
+    
+    // Process each pattern in sequence
+    for pattern in patterns {
+        // Call the existing function that handles a single pattern
+        let groups = discover_log_groups_by_pattern(cwl_client, pattern).await?;
+        // Add results to our set
+        for group in groups {
+            discovered_groups.insert(group);
+        }
+    }
+    
+    // Convert back to Vec for the return value
+    Ok(discovered_groups.into_iter().collect())
+}
+
+/// Discovers log groups matching a single pattern.
+async fn discover_log_groups_by_pattern(
+    cwl_client: &CwlClient,
+    pattern: &str,
+) -> Result<Vec<String>> {
+    tracing::debug!("Discovering log groups matching pattern: '{}'", pattern);
+    let describe_output = cwl_client
+        .describe_log_groups()
+        .log_group_name_pattern(pattern)
+        .send()
+        .await
+        .context("Failed to describe log groups")?;
+
+    Ok(describe_output
+        .log_groups
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|lg| lg.log_group_name)
+        .collect())
 }
 
 /// Discovers log groups within a CloudFormation stack.
@@ -197,27 +269,6 @@ async fn discover_log_groups_from_stack(
         }
     }
     Ok(discovered_groups)
-}
-
-/// Discovers log groups matching a pattern.
-async fn discover_log_groups_by_pattern(
-    cwl_client: &CwlClient,
-    pattern: &str,
-) -> Result<Vec<String>> {
-    tracing::debug!("Discovering log groups matching pattern: '{}'", pattern);
-    let describe_output = cwl_client
-        .describe_log_groups()
-        .log_group_name_pattern(pattern)
-        .send()
-        .await
-        .context("Failed to describe log groups")?;
-
-    Ok(describe_output
-        .log_groups
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|lg| lg.log_group_name)
-        .collect())
 }
 
 /// Validates a list of potential log group names, checking for Lambda@Edge variants if necessary.

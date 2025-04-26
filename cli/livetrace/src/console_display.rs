@@ -10,13 +10,16 @@ use opentelemetry_proto::tonic::{
 use prettytable::{format, row, Table};
 use prost::Message;
 use std::collections::HashMap;
-
+use terminal_size::{self, Width, Height};
 use crate::processing::TelemetryData; // Need TelemetryData for display_console
 
 // Constants
 const SERVICE_NAME_WIDTH: usize = 25;
 const SPAN_NAME_WIDTH: usize = 40;
 const SPAN_ID_WIDTH: usize = 32;
+const SPAN_KIND_WIDTH: usize = 10;    // Width for the Span Kind column
+const SPAN_ATTRS_WIDTH: usize = 30;   // Width for the Span Attributes column
+const DURATION_WIDTH: usize = 10;     // Width for the Duration column
 
 // Define a bright red color for errors
 const ERROR_COLOR: (u8, u8, u8) = (255, 0, 0); // Bright red
@@ -187,20 +190,30 @@ struct EventInfo {
     span_id: String,
     #[allow(dead_code)]
     trace_id: String,
-    attributes: Vec<KeyValue>,
+    attributes: Vec<KeyValue>,     // Event's own attributes
+    span_attributes: Vec<KeyValue>, // Attributes from the parent span
     service_name: String,
     is_error: bool,
     level: String,
 }
 
+// Function to get terminal width with a default fallback
+pub fn get_terminal_width(default_width: usize) -> usize {
+    if let Some((Width(w), Height(_h))) = terminal_size::terminal_size() {
+        w as usize
+    } else {
+        default_width // Fallback if terminal size can't be determined
+    }
+}
+
 // Public Display Function
 pub fn display_console(
     batch: &[TelemetryData],
-    timeline_width: usize,
     compact_display: bool,
     event_attr_globs: &Option<GlobSet>,
     event_severity_attribute_name: &str,
     theme: Theme,
+    span_attr_globs: &Option<GlobSet>,
 ) -> Result<()> {
     // Debug logging with theme
     tracing::debug!("Display console called with theme={:?}", theme);
@@ -245,20 +258,23 @@ pub fn display_console(
     }
 
     // Calculate approximate total table width for header ruling
-    const DURATION_ESTIMATE: usize = 6; // Approx width for duration
-    const SPACING_NON_COMPACT: usize = 4; // Approx spaces between 5 columns
-    const SPACING_COMPACT: usize = 2; // Approx spaces between 3 columns
+    const SPACING_NON_COMPACT: usize = 6; // Approx spaces between 7 columns
+    const SPACING_COMPACT: usize = 3; // Approx spaces between 4 columns
 
-    let total_table_width = if compact_display {
-        SERVICE_NAME_WIDTH + SPAN_NAME_WIDTH + DURATION_ESTIMATE + SPACING_COMPACT + timeline_width
+    // Calculate the fixed width excluding the timeline
+    let fixed_width_excluding_timeline = if compact_display {
+        SERVICE_NAME_WIDTH + SPAN_NAME_WIDTH + DURATION_WIDTH + SPACING_COMPACT
     } else {
-        SERVICE_NAME_WIDTH
-            + SPAN_NAME_WIDTH
-            + DURATION_ESTIMATE
-            + SPAN_ID_WIDTH
-            + SPACING_NON_COMPACT
-            + timeline_width
+        SERVICE_NAME_WIDTH + SPAN_NAME_WIDTH + SPAN_KIND_WIDTH + DURATION_WIDTH + SPAN_ID_WIDTH + SPAN_ATTRS_WIDTH + SPACING_NON_COMPACT
     };
+    
+    // Get terminal width and calculate dynamic timeline width
+    let terminal_width = get_terminal_width(120); // Use a larger default fallback
+    // Ensure timeline width is at least some minimum (e.g., 10) or doesn't cause overflow
+    let calculated_timeline_width = terminal_width.saturating_sub(fixed_width_excluding_timeline).max(10);
+
+    // Total width is now just the terminal width for header padding
+    let total_table_width = terminal_width;
 
     for (trace_id, spans_in_trace_with_service) in traces {
         // Print Trace ID Header
@@ -266,7 +282,7 @@ pub fn display_console(
         // Calculate padding based on total table width
         let trace_padding = total_table_width.saturating_sub(trace_heading.len() + 3); // 3 for " ─ " and spaces
         println!(
-            "\n {} {} {}",
+            "\n{} {} {}",
             "─".dimmed(),
             trace_heading.bold(),
             "─".repeat(trace_padding).dimmed()
@@ -316,6 +332,7 @@ pub fn display_console(
                     span_id: span_id_hex.clone(),
                     trace_id: trace_id.clone(),
                     attributes: event.attributes.clone(),
+                    span_attributes: span.attributes.clone(),
                     service_name: service_name.clone(),
                     is_error,
                     level,
@@ -376,7 +393,34 @@ pub fn display_console(
         let trace_duration_ns = max_end_time.saturating_sub(min_start_time);
 
         let mut table = Table::new();
-        table.set_format(*format::consts::FORMAT_CLEAN);
+        // Use a custom format based on CLEAN
+        let table_format = format::FormatBuilder::new()
+            .column_separator(' ')
+            .borders(' ')
+            .separators(&[], format::LineSeparator::new(' ', ' ', ' ', ' '))
+            .padding(1, 1)
+            .build();
+        table.set_format(table_format);
+
+        // Add table headers appropriate for compact vs non-compact mode
+        if compact_display {
+            table.set_titles(row![
+                "Service",
+                "Span Name",
+                "Duration (ms)",
+                "Timeline"
+            ]);
+        } else {
+            table.set_titles(row![ bl =>
+                "Service",
+                "Span Name",
+                "Kind",
+                "Duration (ms)",
+                "Span ID",
+                "Attributes",
+                "Timeline"
+            ]);
+        }
 
         for root in roots {
             add_span_to_table(
@@ -385,9 +429,11 @@ pub fn display_console(
                 0,
                 min_start_time,
                 trace_duration_ns,
-                timeline_width,
+                calculated_timeline_width,
                 compact_display,
                 theme,
+                &span_map,
+                span_attr_globs,
             )?;
         }
         table.printstd();
@@ -399,7 +445,7 @@ pub fn display_console(
             // Calculate padding based on total table width
             let events_padding = total_table_width.saturating_sub(events_heading.len() + 3);
             println!(
-                "\n {} {} {}",
+                "\n{} {} {}",
                 "─".dimmed(),
                 events_heading.bold(),
                 "─".repeat(events_padding).dimmed()
@@ -409,9 +455,19 @@ pub fn display_console(
                 let formatted_time = timestamp.format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string();
                 let mut attrs_to_display: Vec<String> = Vec::new();
                 if let Some(globs) = event_attr_globs {
+                    // Add event attributes that match the glob patterns
                     for attr in &event.attributes {
                         if globs.is_match(&attr.key) {
                             attrs_to_display.push(format_keyvalue(attr));
+                        }
+                    }
+                    
+                    // Add span attributes that match the glob patterns, with a "span." prefix
+                    for attr in &event.span_attributes {
+                        if globs.is_match(&attr.key) {
+                            // Add a "span." prefix to distinguish from event attributes
+                            let value_str = format_anyvalue(&attr.value);
+                            attrs_to_display.push(format!("span.{}: {}", attr.key.bright_black(), value_str));
                         }
                     }
                 }
@@ -420,14 +476,16 @@ pub fn display_console(
                 let color = theme.get_color_for_service(&event.service_name);
                 let (r, g, b) = color;
 
-                // Apply service color to span ID unless it's an error
-                let colored_span_id = if event.is_error {
-                    event
-                        .span_id
+                // Shorten span ID for display
+                let span_id_prefix = event.span_id.chars().take(8).collect::<String>();
+                
+                // Apply service color to span ID prefix unless it's an error
+                let colored_span_id_prefix = if event.is_error {
+                    span_id_prefix
                         .truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2)
                         .to_string()
                 } else {
-                    event.span_id.truecolor(r, g, b).to_string()
+                    span_id_prefix.truecolor(r, g, b).to_string()
                 };
 
                 // Color the level based on its value
@@ -443,7 +501,7 @@ pub fn display_console(
                 let log_line_start = format!(
                     "{} {} [{}] [{}] {}",
                     formatted_time.bright_black(),
-                    colored_span_id,
+                    colored_span_id_prefix,
                     event.service_name.truecolor(r, g, b), // Use service-specific color
                     colored_level,
                     event.name,
@@ -545,33 +603,29 @@ fn add_span_to_table(
     timeline_width: usize,
     compact_display: bool,
     theme: Theme,
+    span_map: &HashMap<String, Span>,
+    span_attr_globs: &Option<GlobSet>,
 ) -> Result<()> {
     let indent = "  ".repeat(depth);
 
-    // Get color based on theme and service name
+    // Get color for timeline bar only
     let (r, g, b) = theme.get_color_for_service(&node.service_name);
 
+    // --- Create Uncolored Cell Content ---
     let service_name_content = node
         .service_name
         .chars()
         .take(SERVICE_NAME_WIDTH)
-        .collect::<String>()
-        .truecolor(r, g, b) // More distinct color
-        .to_string();
+        .collect::<String>();
 
     let span_name_width = SPAN_NAME_WIDTH.saturating_sub(indent.len());
     let truncated_span_name = node.name.chars().take(span_name_width).collect::<String>();
     let span_name_cell_content = format!("{} {}", indent, truncated_span_name);
 
     let duration_ms = node.duration_ns as f64 / 1_000_000.0;
-    let colored_duration = if node.status_code == status::StatusCode::Error {
-        format!("{:.2}", duration_ms)
-            .truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2)
-            .to_string()
-    } else {
-        format!("{:.2}", duration_ms).bright_black().to_string()
-    };
+    let duration_content = format!("{:.2}", duration_ms);
 
+    // Timeline bar remains colored
     let bar_cell_content = render_bar(
         node.start_time,
         node.duration_ns,
@@ -582,29 +636,67 @@ fn add_span_to_table(
         (r, g, b), // Pass service color to render_bar
     );
 
+    // Get the actual span object for additional data
+    let span_obj = span_map.get(&node.id);
+    
     if compact_display {
         table.add_row(row![
             service_name_content,
             span_name_cell_content,
-            colored_duration,
+            duration_content, // Uncolored
             bar_cell_content
         ]);
     } else {
-        let span_id_content = node.id.chars().take(SPAN_ID_WIDTH).collect::<String>();
-        // Color span ID with service color unless it's an error
-        let colored_span_id = if node.status_code == status::StatusCode::Error {
-            span_id_content
+        // Format span kind (uncolored)
+        let kind_cell_content = span_obj.map_or("UNKNOWN".to_string(), |span| format_span_kind(span.kind))
+                                       .chars().take(SPAN_KIND_WIDTH).collect::<String>();
+        
+        // Format span ID prefix (uncolored initially)
+        let span_id_prefix = node.id.chars().take(8).collect::<String>();
+        // ADD COLORING BACK for Span ID
+        let colored_span_id_prefix = if node.status_code == status::StatusCode::Error {
+            span_id_prefix
                 .truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2)
                 .to_string()
         } else {
-            span_id_content.truecolor(r, g, b).to_string() // Use service color for span IDs
+            span_id_prefix.truecolor(r, g, b).to_string() // Use service color
+        };
+        
+        // Format span attributes (uncolored)
+        let attrs_cell_content = if let Some(globs) = span_attr_globs {
+            if let Some(span) = span_obj {
+                let mut attrs_display = Vec::new();
+                for attr in &span.attributes {
+                    if globs.is_match(&attr.key) {
+                        // Use a plain key: value format without color
+                        let value_str = format_anyvalue(&attr.value);
+                        attrs_display.push(format!("{}:{}", attr.key, value_str)); 
+                    }
+                }
+                if attrs_display.is_empty() {
+                    "".to_string()
+                } else {
+                    let joined = attrs_display.join(", ");
+                    if joined.len() > SPAN_ATTRS_WIDTH {
+                        format!("{}...", joined.chars().take(SPAN_ATTRS_WIDTH - 3).collect::<String>())
+                    } else {
+                        joined
+                    }
+                }
+            } else {
+                "".to_string()
+            }
+        } else {
+            "".to_string()
         };
 
         table.add_row(row![
             service_name_content,
             span_name_cell_content,
-            colored_duration,
-            colored_span_id,
+            kind_cell_content,
+            duration_content, // Uncolored
+            colored_span_id_prefix, // Use the colored version
+            attrs_cell_content, // Uncolored
             bar_cell_content
         ]);
     }
@@ -622,6 +714,8 @@ fn add_span_to_table(
             timeline_width,
             compact_display,
             theme,
+            span_map,
+            span_attr_globs,
         )?;
     }
 
@@ -635,38 +729,49 @@ fn render_bar(
     trace_duration_ns: u64,
     timeline_width: usize,
     status_code: status::StatusCode,
-    service_color: (u8, u8, u8), // Add service color parameter
+    service_color: (u8, u8, u8), 
 ) -> String {
+    // If there's no duration, return empty space
     if trace_duration_ns == 0 {
         return " ".repeat(timeline_width);
     }
+
+    // Calculate start and end positions
     let timeline_width_f = timeline_width as f64;
     let offset_ns = start_time_ns.saturating_sub(trace_start_time_ns);
     let offset_fraction = offset_ns as f64 / trace_duration_ns as f64;
     let duration_fraction = duration_ns as f64 / trace_duration_ns as f64;
     let start_pos = (offset_fraction * timeline_width_f).floor() as usize;
     let end_pos = ((offset_fraction + duration_fraction) * timeline_width_f).ceil() as usize;
-    let mut bar = String::with_capacity(timeline_width);
 
-    // Use a simpler, consistent block for better visualization
+    // Build the bar content string with spaces and blocks
+    let mut bar_content = String::with_capacity(timeline_width);
     for i in 0..timeline_width {
         if i >= start_pos && i < end_pos.min(timeline_width) {
-            if status_code == status::StatusCode::Error {
-                bar.push_str(
-                    &'▄'
-                        .to_string()
-                        .truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2)
-                        .to_string(),
-                );
-            } else {
-                let (r, g, b) = service_color;
-                bar.push_str(&'▄'.to_string().truecolor(r, g, b).to_string());
-            }
+            bar_content.push('▄');
         } else {
-            bar.push(' ');
+            bar_content.push(' ');
         }
     }
-    bar
+
+    // Apply color to the entire bar string
+    if status_code == status::StatusCode::Error {
+        bar_content.truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2).to_string()
+    } else {
+        let (r, g, b) = service_color;
+        bar_content.truecolor(r, g, b).to_string()
+    }
+}
+
+fn format_span_kind(kind: i32) -> String {
+    match kind {
+        1 => "INTERNAL".to_string(),
+        2 => "SERVER".to_string(),
+        3 => "CLIENT".to_string(),
+        4 => "PRODUCER".to_string(),
+        5 => "CONSUMER".to_string(),
+        _ => "UNSPECIFIED".to_string(),
+    }
 }
 
 fn format_keyvalue(kv: &KeyValue) -> String {
@@ -703,3 +808,4 @@ fn format_anyvalue(av: &Option<AnyValue>) -> String {
         None => "<no_value>".to_string(),
     }
 }
+

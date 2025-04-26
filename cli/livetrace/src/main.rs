@@ -16,6 +16,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 use colored::*;
+use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::Client as ReqwestClient;
 use tokio::sync::mpsc;
 use tokio::time::interval;
@@ -26,7 +27,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use crate::aws_setup::setup_aws_resources;
 use crate::cli::{parse_event_attr_globs, CliArgs};
 use crate::config::{load_and_resolve_config, save_profile_config, EffectiveConfig, ProfileConfig};
-use crate::console_display::{display_console, Theme};
+use crate::console_display::{display_console, Theme, get_terminal_width};
 use crate::forwarder::{parse_otlp_headers_from_vec, send_batch};
 use crate::live_tail_adapter::start_live_tail_task;
 use crate::poller::start_polling_task;
@@ -38,7 +39,20 @@ async fn main() -> Result<()> {
     // 1. Parse Args fully now (clap handles defaults)
     let args = CliArgs::parse();
 
-    // --- Save Profile Check ---
+    // Check if list-themes was specified
+    if args.list_themes {
+        println!("\nAvailable themes:");
+        println!("  * default - OpenTelemetry-inspired blue-purple palette");
+        println!("  * tableau - Tableau 12 color palette with distinct hues");
+        println!("  * colorbrewer - ColorBrewer Set3 palette (pastel colors)");
+        println!("  * material - Material Design palette with bright, modern colors");
+        println!("  * solarized - Solarized color scheme with muted tones");
+        println!("  * monochrome - Grayscale palette for minimal distraction");
+        println!("\nUsage: livetrace --theme <THEME>");
+        return Ok(());
+    }
+
+    // Save Profile Check
     if let Some(profile_name) = args.save_profile.as_ref() {
         // Convert CliArgs to the savable ProfileConfig format
         let profile_to_save = ProfileConfig::from_cli_args(&args);
@@ -50,9 +64,9 @@ async fn main() -> Result<()> {
         );
         return Ok(());
     }
-    // --- End Save Profile Check ---
+    // End Save Profile Check
 
-    // --- Load Configuration Profile if Specified ---
+    // Load Configuration Profile if Specified
     let config = if args.config_profile.is_some() {
         load_and_resolve_config(args.config_profile.clone(), &args)?
     } else {
@@ -64,7 +78,6 @@ async fn main() -> Result<()> {
             aws_region: args.aws_region.clone(),
             aws_profile: args.aws_profile.clone(),
             forward_only: args.forward_only,
-            timeline_width: args.timeline_width,
             compact_display: args.compact_display,
             event_attrs: args.event_attrs.clone(),
             event_severity_attribute: args.event_severity_attribute.clone(),
@@ -72,13 +85,14 @@ async fn main() -> Result<()> {
             session_timeout: args.session_timeout,
             verbose: args.verbose,
             theme: args.theme.clone(),
+            span_attrs: args.span_attrs.clone(),
         }
     };
 
     // Validate discovery parameters - either log_group_pattern or stack_name must be set
     if config.log_group_pattern.is_none() && config.stack_name.is_none() {
         return Err(anyhow::anyhow!(
-            "Either --pattern or --stack-name must be provided on the command line or in the configuration profile"
+            "Either --log-group-pattern or --stack-name must be provided on the command line or in the configuration profile"
         ));
     }
 
@@ -152,7 +166,6 @@ async fn main() -> Result<()> {
         otlp_headers: Vec::new(),
         verbose: 0,
         forward_only: false,
-        timeline_width: 80,
         compact_display: false,
         event_attrs: None,
         poll_interval: None,
@@ -161,6 +174,8 @@ async fn main() -> Result<()> {
         config_profile: None,
         save_profile: None,
         theme: "default".to_string(),
+        list_themes: false,
+        span_attrs: None,
     };
     let aws_result = setup_aws_resources(&aws_setup_args).await?;
     let cwl_client = aws_result.cwl_client;
@@ -179,53 +194,121 @@ async fn main() -> Result<()> {
     // 8. Prepare Console Display
     let console_enabled = !config.forward_only;
     let event_attr_globs = parse_event_attr_globs(&config.event_attrs); // Now passes the Option<String> directly
+    let span_attr_globs = parse_event_attr_globs(&config.span_attrs); // Use the same function for parsing
 
-    // --- Preamble Output (List Style) ---
-    let preamble_width: usize = 80; // Explicitly usize
-    let config_heading = " Livetrace Configuration";
+    
+
+    // Preamble Output (List Style)
+    let preamble_width: usize = get_terminal_width(80);
+    let config_heading = "Livetrace Configuration";
     let config_padding = preamble_width.saturating_sub(config_heading.len() + 3);
 
     println!("\n");
     println!(
-        " {} {} {}",
+        "{} {} {}\n",
         "─".dimmed(),
         config_heading.bold(),
         "─".repeat(config_padding).dimmed()
     );
-    println!("  {:<18}: {}", "Account ID".dimmed(), account_id);
-    println!("  {:<18}: {}", "Region".dimmed(), region_str);
-    // Need validated names for the count/list - let's re-get them from ARNs for simplicity here
-    // In a real scenario, might pass validated_names through AwsSetupResult
+    
+    // Basic AWS Information
+    println!("  {:<18}: {}", "AWS Account ID".dimmed(), account_id);
+    println!("  {:<18}: {}", "AWS Region".dimmed(), region_str);
+    if let Some(profile) = &config.aws_profile {
+        println!("  {:<18}: {}", "AWS Profile".dimmed(), profile);
+    }
+    
+    // Log Group Sources
+    if let Some(patterns) = &config.log_group_pattern {
+        println!("  {:<18}: {:?}", "Pattern".dimmed(), patterns);
+    }
+    if let Some(stack) = &config.stack_name {
+        println!("  {:<18}: {}", "CloudFormation".dimmed(), stack);
+    }
+    
+    // Modes & Settings
+    println!();
+    
+    // Operation Mode
+    if let Some(poll_secs) = config.poll_interval {
+        println!("  {:<18}: {}", "Mode".dimmed(), "Polling");
+        println!("  {:<18}: {} seconds", "Poll Interval".dimmed(), poll_secs);
+    } else {
+        println!("  {:<18}: {}", "Mode".dimmed(), "Live Tail");
+        println!("  {:<18}: {} minutes", "Session Timeout".dimmed(), config.session_timeout);
+    }
+    
+    // Forwarding Configuration
+    println!("  {:<18}: {}", "Forward Only".dimmed(), if config.forward_only { "Yes" } else { "No" });
+    if let Some(endpoint) = &resolved_endpoint {
+        println!("  {:<18}: {}", "OTLP Endpoint".dimmed(), endpoint);
+    } else {
+        println!("  {:<18}: {}", "OTLP Endpoint".dimmed(), "Not configured");
+    }
+    if !resolved_headers_vec.is_empty() {
+        println!("  {:<18}: {} headers", "OTLP Headers".dimmed(), resolved_headers_vec.len());
+    }
+    
+    // Display Settings
+    println!("  {:<18}: {}", "Theme".dimmed(), config.theme);
+    println!("  {:<18}: {}", "Compact Display".dimmed(), if config.compact_display { "Yes" } else { "No" });
+    if let Some(attrs) = &config.event_attrs {
+        println!("  {:<18}: {}", "Event Attributes".dimmed(), attrs);
+    } else {
+        println!("  {:<18}: {}", "Event Attributes".dimmed(), "All");
+    }
+    println!("  {:<18}: {}", "Severity Attr".dimmed(), config.event_severity_attribute);
+    
+    // Config Source
+    if let Some(profile) = &args.config_profile {
+        println!("  {:<18}: {}", "Config Profile".dimmed(), profile);
+    }
+    
+    // Verbosity Level
+    let verbosity_str = match config.verbose {
+        0 => "Normal",
+        1 => "Debug (-v)",
+        _ => {
+            let v_str = format!("Trace (-v{})", "v".repeat(config.verbose as usize - 1));
+            Box::leak(v_str.into_boxed_str()) // Convert to 'static &str
+        }
+    };
+    println!("  {:<18}: {}", "Verbosity".dimmed(), verbosity_str);
+    
+    // Display Resolved Log Groups - moved to the end
+    println!();
     let validated_log_group_names_for_display: Vec<String> = resolved_log_group_arns
         .iter()
         .map(|arn| arn.split(':').last().unwrap_or("unknown-name").to_string())
         .collect();
-    println!(
-        "  {:<18}: ({})",
-        "Log Groups".dimmed(),
-        validated_log_group_names_for_display.len()
+    print!(
+        "  {:<18}: ",
+        "Log Groups".dimmed()
     );
-    for name in &validated_log_group_names_for_display {
-        println!("{:<20}  - {}", "", name.bright_black());
+    if let Some((first, rest)) = validated_log_group_names_for_display.split_first() {
+        println!("{}", first.bright_black());
+        for name in rest {
+            println!("{:<22}{}", "", name.bright_black());
+        }
+    } else {
+        println!("None");
     }
-    if let Some(profile) = &args.config_profile {
-        println!("  {:<18}: {}", "Config Profile".dimmed(), profile);
-    }
+    
     println!("\n");
-    // --- End Preamble ---
+    // End Preamble
 
     // 9. Create MPSC Channel and Spawn Event Source Task
     let (tx, mut rx) = mpsc::channel::<Result<TelemetryData>>(100); // Channel for TelemetryData or errors
 
     if let Some(interval_secs) = config.poll_interval {
-        // --- Polling Mode ---
+        // Polling Mode
         tracing::debug!(
             interval = interval_secs,
             "Using FilterLogEvents polling mode."
         );
         start_polling_task(cwl_client, resolved_log_group_arns, interval_secs, tx);
     } else {
-        // --- Live Tail Mode ---
+        // Live Tail Mode
         tracing::debug!(
             timeout_minutes = config.session_timeout,
             "Using StartLiveTail streaming mode with timeout."
@@ -242,6 +325,17 @@ async fn main() -> Result<()> {
     tracing::debug!("Waiting for telemetry events...");
     let mut telemetry_buffer: Vec<TelemetryData> = Vec::new();
     let mut ticker = interval(Duration::from_secs(1));
+    
+    // Create a spinner for waiting period
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::default_spinner()
+            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
+            .template("{spinner} {msg}")
+            .unwrap()
+    );
+    spinner.set_message("Waiting for telemetry events...");
+    spinner.enable_steady_tick(Duration::from_millis(100));
 
     loop {
         tokio::select! {
@@ -249,59 +343,75 @@ async fn main() -> Result<()> {
             received = rx.recv() => {
                 match received {
                     Some(Ok(telemetry)) => {
+                        // Pause spinner when receiving data
+                        spinner.set_message("Processing telemetry data...");
+                        
                         // Successfully received telemetry data
                         if console_enabled || endpoint_opt.is_some() {
                             telemetry_buffer.push(telemetry);
                         }
+                        
+                        // Resume spinner
+                        spinner.set_message("Waiting for telemetry events...");
                     }
                     Some(Err(e)) => {
                         // An error occurred in the source task (polling or live tail)
+                        spinner.set_message(format!("Error: {}", e));
                         tracing::error!(error = %e, "Error received from event source task");
-                        // Depending on the error, we might want to break or continue
-                        // For now, let's break if the source task reports a fatal error
-                        // (like channel closure implicitly does via None)
                     }
                     None => {
                         // Channel closed by the sender task
+                        spinner.finish_with_message("Event source channel closed");
                         tracing::info!("Event source channel closed. Exiting.");
                         break;
                     }
                 }
             }
-            // Ticker Branch (unchanged)
+            // Ticker Branch
             _ = ticker.tick() => {
                 if !telemetry_buffer.is_empty() {
-                    tracing::debug!("Timer tick: Processing buffer with {} items.", telemetry_buffer.len());
+                    // Store the batch locally
                     let batch_to_send = std::mem::take(&mut telemetry_buffer);
-
-                    if console_enabled {
-                        // Convert string theme to Theme enum
-                        let theme = Theme::from_str(&config.theme);
-                        display_console(
-                            &batch_to_send,
-                            config.timeline_width,
-                            config.compact_display,
-                            &event_attr_globs,
-                            config.event_severity_attribute.as_str(),
-                            theme,
-                        )?;
-                    }
-
+                    
+                    // Temporarily suspend spinner during display 
+                    spinner.suspend(|| {
+                        tracing::debug!("Timer tick: Processing buffer with {} items.", batch_to_send.len());
+    
+                        if console_enabled {
+                            // Convert string theme to Theme enum
+                            let theme = Theme::from_str(&config.theme);
+                            if let Err(e) = display_console(
+                                &batch_to_send,
+                                config.compact_display,
+                                &event_attr_globs,
+                                config.event_severity_attribute.as_str(),
+                                theme,
+                                &span_attr_globs,
+                            ) {
+                                tracing::error!(error = %e, "Error displaying telemetry data");
+                            }
+                        }
+                    });
+                    
+                    // Process any async work outside of suspend
                     if let Some(endpoint) = endpoint_opt {
-                        send_batch(
+                        if let Err(e) = send_batch(
                             &http_client,
                             endpoint,
                             batch_to_send,
                             &compaction_config,
                             otlp_header_map.clone(),
-                        ).await?;
+                        ).await {
+                            tracing::error!(error = %e, "Error sending telemetry data");
+                        }
                     }
                 }
             }
-            // Removed Live Tail stream recv() branch
-            // Removed Timeout branch
         }
     }
+
+    // Finish spinner before final flush
+    spinner.finish_and_clear();
 
     // 11. Final Flush
     if !telemetry_buffer.is_empty() {
@@ -314,25 +424,28 @@ async fn main() -> Result<()> {
         if console_enabled {
             // Convert string theme to Theme enum
             let theme = Theme::from_str(&config.theme);
-            display_console(
+            if let Err(e) = display_console(
                 &final_batch,
-                config.timeline_width,
                 config.compact_display,
                 &event_attr_globs,
                 &config.event_severity_attribute,
                 theme,
-            )?;
+                &span_attr_globs,
+            ) {
+                tracing::error!(error = %e, "Error displaying final telemetry data");
+            }
         }
 
         if let Some(endpoint) = endpoint_opt {
-            send_batch(
+            if let Err(e) = send_batch(
                 &http_client,
                 endpoint,
                 final_batch,
                 &compaction_config,
                 otlp_header_map.clone(),
-            )
-            .await?;
+            ).await {
+                tracing::error!(error = %e, "Error sending final telemetry data");
+            }
         }
     }
 

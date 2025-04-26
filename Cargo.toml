@@ -8,6 +8,7 @@ members = [
     "demo/rust",
     "benchmark",
     "benchmark/proxy", 
+    "benchmark/functions/rust/*",
     "packages/rust/lambda-otel-lite/examples",
     "cli/livetrace"
 ]
@@ -126,9 +127,11 @@ rand = "0.9"
 colored = "2.0"
 hex = "0.4"
 prettytable-rs = "0.10"
+tabled = "0.19.0"
 nix = "0.29.0"
 scopeguard = "1.2"
 tempfile = "3.8"
+terminal_size = "0.4.2"
 
 [profile.release]
 opt-level = "z"

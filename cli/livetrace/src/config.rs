@@ -26,8 +26,8 @@ pub struct ConfigFile {
 #[serde(deny_unknown_fields)]
 pub struct ProfileConfig {
     // --- Discovery --- (Mirroring CliArgs groups)
-    #[serde(rename = "pattern")]
-    pub log_group_pattern: Option<String>,
+    #[serde(rename = "log-group-pattern")]
+    pub log_group_pattern: Option<Vec<String>>,
     #[serde(rename = "stack-name")]
     pub stack_name: Option<String>,
 
@@ -46,8 +46,6 @@ pub struct ProfileConfig {
     // --- Console Display --- (Mirroring CliArgs)
     #[serde(rename = "forward-only")]
     pub forward_only: Option<bool>,
-    #[serde(rename = "timeline-width")]
-    pub timeline_width: Option<usize>,
     #[serde(rename = "compact-display")]
     pub compact_display: Option<bool>,
     #[serde(rename = "event-attrs")]
@@ -58,6 +56,8 @@ pub struct ProfileConfig {
     pub monochrome: Option<bool>,
     #[serde(rename = "theme")]
     pub theme: Option<String>,
+    #[serde(rename = "span-attrs")]
+    pub span_attrs: Option<String>,
 
     // --- Mode --- (Mirroring CliArgs groups)
     #[serde(rename = "poll-interval")]
@@ -71,7 +71,7 @@ pub struct ProfileConfig {
 #[derive(Debug, Clone)] // Clone is useful
 pub struct EffectiveConfig {
     // --- Discovery ---
-    pub log_group_pattern: Option<String>,
+    pub log_group_pattern: Option<Vec<String>>,
     pub stack_name: Option<String>,
 
     // --- Forwarding ---
@@ -84,10 +84,10 @@ pub struct EffectiveConfig {
 
     // --- Console Display ---
     pub forward_only: bool,
-    pub timeline_width: usize,
     pub compact_display: bool,
     pub event_attrs: Option<String>,
     pub event_severity_attribute: String,
+    pub span_attrs: Option<String>,
 
     // --- Mode ---
     pub poll_interval: Option<u64>,
@@ -105,8 +105,11 @@ impl ProfileConfig {
     /// Creates a ProfileConfig from CliArgs, only including non-default values.
     pub fn from_cli_args(args: &CliArgs) -> Self {
         ProfileConfig {
-            log_group_pattern: args.log_group_pattern.clone(), // Always include one of pattern/stack
-            stack_name: args.stack_name.clone(), // Always include one of pattern/stack
+            log_group_pattern: args
+                .log_group_pattern
+                .clone()
+                .filter(|v| !v.is_empty()),
+            stack_name: args.stack_name.clone(),
             otlp_endpoint: args.otlp_endpoint.clone(),
             otlp_headers: if args.otlp_headers.is_empty() {
                 None
@@ -117,9 +120,9 @@ impl ProfileConfig {
             aws_profile: args.aws_profile.clone(),
             // Only save flags/options if they differ from clap's default
             forward_only: Some(args.forward_only).filter(|&f| f), // Default is false
-            timeline_width: Some(args.timeline_width).filter(|&w| w != 80), // Default is 80
             compact_display: Some(args.compact_display).filter(|&c| c), // Default is false
             event_attrs: args.event_attrs.clone(),
+            span_attrs: args.span_attrs.clone(),
             poll_interval: args.poll_interval,
             session_timeout: Some(args.session_timeout).filter(|&t| t != 30), // Default is 30
             event_severity_attribute: Some(args.event_severity_attribute.clone())
@@ -145,7 +148,6 @@ pub fn load_and_resolve_config(
         aws_region: None,
         aws_profile: None,
         forward_only: false,
-        timeline_width: 80,
         compact_display: false,
         event_attrs: None,
         event_severity_attribute: "event.severity".to_string(),
@@ -153,6 +155,7 @@ pub fn load_and_resolve_config(
         session_timeout: 30,
         verbose: 0,
         theme: "default".to_string(),
+        span_attrs: None,
     };
 
     // If no profile specified, just return CLI args as effective config
@@ -206,7 +209,11 @@ pub fn load_and_resolve_config(
 /// Applies CLI arguments to an effective configuration, but only if they are explicitly set.
 fn apply_cli_args_to_effective(cli_args: &CliArgs, effective: &mut EffectiveConfig) {
     // For Option<T> fields, we know they're explicitly set if they're Some
-    if cli_args.log_group_pattern.is_some() {
+    if cli_args
+        .log_group_pattern
+        .as_ref()
+        .is_some_and(|v| !v.is_empty())
+    {
         effective.log_group_pattern = cli_args.log_group_pattern.clone();
     }
 
@@ -234,6 +241,10 @@ fn apply_cli_args_to_effective(cli_args: &CliArgs, effective: &mut EffectiveConf
         effective.event_attrs = cli_args.event_attrs.clone();
     }
 
+    if cli_args.span_attrs.is_some() {
+        effective.span_attrs = cli_args.span_attrs.clone();
+    }
+
     if cli_args.poll_interval.is_some() {
         effective.poll_interval = cli_args.poll_interval;
     }
@@ -243,7 +254,6 @@ fn apply_cli_args_to_effective(cli_args: &CliArgs, effective: &mut EffectiveConf
 
     // Always apply these values from CLI args, as we can't detect if they were explicitly set
     effective.forward_only = cli_args.forward_only;
-    effective.timeline_width = cli_args.timeline_width;
     effective.compact_display = cli_args.compact_display;
     effective.event_severity_attribute = cli_args.event_severity_attribute.clone();
     effective.session_timeout = cli_args.session_timeout;
@@ -322,8 +332,12 @@ fn load_config_file(path: &Path) -> Result<ConfigFile> {
 /// Applies settings from a profile to an effective configuration.
 fn apply_profile_to_effective(profile: &ProfileConfig, effective: &mut EffectiveConfig) {
     // Only override non-None values from the profile
-    if let Some(val) = &profile.log_group_pattern {
-        effective.log_group_pattern = Some(val.clone());
+    if profile
+        .log_group_pattern
+        .as_ref()
+        .is_some_and(|v| !v.is_empty())
+    {
+        effective.log_group_pattern = profile.log_group_pattern.clone();
     }
 
     if let Some(val) = &profile.stack_name {
@@ -348,10 +362,6 @@ fn apply_profile_to_effective(profile: &ProfileConfig, effective: &mut Effective
 
     if let Some(val) = profile.forward_only {
         effective.forward_only = val;
-    }
-
-    if let Some(val) = profile.timeline_width {
-        effective.timeline_width = val;
     }
 
     if let Some(val) = profile.compact_display {
@@ -380,6 +390,10 @@ fn apply_profile_to_effective(profile: &ProfileConfig, effective: &mut Effective
         // For backward compatibility, set theme to monochrome if monochrome was true
         effective.theme = "monochrome".to_string();
     }
+
+    if let Some(val) = &profile.span_attrs {
+        effective.span_attrs = Some(val.clone());
+    }
 }
 
 #[cfg(test)]
@@ -392,7 +406,7 @@ mod tests {
     // Helper to create a mock CliArgs for testing
     fn mock_cli_args() -> CliArgs {
         CliArgs {
-            log_group_pattern: Some("test-pattern".to_string()),
+            log_group_pattern: Some(vec!["test-pattern-1".to_string(), "test-pattern-2".to_string()]),
             stack_name: None,
             otlp_endpoint: Some("http://localhost:4318".to_string()),
             otlp_headers: vec!["Auth=Bearer xyz".to_string()],
@@ -400,15 +414,16 @@ mod tests {
             aws_profile: Some("test-profile".to_string()),
             verbose: 1,
             forward_only: true,
-            timeline_width: 100,
             compact_display: true,
             event_attrs: Some("http.*,db.*".to_string()),
+            span_attrs: Some("http.status_code,db.system".to_string()),
             poll_interval: Some(30),
             session_timeout: 45,
             event_severity_attribute: "custom.severity".to_string(),
             config_profile: None,
             save_profile: None,
             theme: "test-theme".to_string(),
+            list_themes: false,
         }
     }
 
@@ -423,14 +438,13 @@ aws-region = "us-east-1"
 event-severity-attribute = "global.severity"
 
 [profiles.default]
-pattern = "default-pattern"
+log-group-pattern = ["default-pattern-a", "default-pattern-b"]
 forward-only = true
 
 [profiles.dev]
-pattern = "dev-pattern"
+log-group-pattern = ["/aws/lambda/dev-func", "specific-dev-group"]
 otlp-endpoint = "http://dev-collector:4318"
 aws-region = "us-west-1"
-timeline-width = 120
         "#;
         fs::write(&config_path, config_content).expect("Failed to write test config");
         config_path
@@ -442,7 +456,10 @@ timeline-width = 120
         let profile = ProfileConfig::from_cli_args(&args);
 
         // Verify fields are converted correctly
-        assert_eq!(profile.log_group_pattern, Some("test-pattern".to_string()));
+        assert_eq!(
+            profile.log_group_pattern,
+            Some(vec!["test-pattern-1".to_string(), "test-pattern-2".to_string()])
+        );
         assert_eq!(profile.stack_name, None);
         assert_eq!(
             profile.otlp_endpoint,
@@ -455,7 +472,6 @@ timeline-width = 120
         assert_eq!(profile.aws_region, Some("us-west-2".to_string()));
         assert_eq!(profile.aws_profile, Some("test-profile".to_string()));
         assert_eq!(profile.forward_only, Some(true));
-        assert_eq!(profile.timeline_width, Some(100));
         assert_eq!(profile.compact_display, Some(true));
         assert_eq!(profile.event_attrs, Some("http.*,db.*".to_string()));
         assert_eq!(profile.poll_interval, Some(30));
@@ -494,7 +510,7 @@ timeline-width = 120
         let saved_profile = &read_config.profiles["test-profile"];
         assert_eq!(
             saved_profile.log_group_pattern,
-            Some("test-pattern".to_string())
+            Some(vec!["test-pattern-1".to_string(), "test-pattern-2".to_string()])
         );
         assert_eq!(
             saved_profile.otlp_endpoint,
@@ -506,14 +522,13 @@ timeline-width = 120
     fn test_apply_profile_to_effective() {
         // Create a base effective config
         let mut effective = EffectiveConfig {
-            log_group_pattern: None,
+            log_group_pattern: Some(vec!["initial-pattern".to_string()]),
             stack_name: Some("original-stack".to_string()),
             otlp_endpoint: None,
             otlp_headers: Vec::new(),
             aws_region: Some("us-east-1".to_string()),
             aws_profile: None,
             forward_only: false,
-            timeline_width: 80,
             compact_display: false,
             event_attrs: None,
             event_severity_attribute: "default.severity".to_string(),
@@ -521,25 +536,26 @@ timeline-width = 120
             session_timeout: 30,
             verbose: 0,
             theme: "default".to_string(),
+            span_attrs: None,
         };
 
         // Create a profile with some settings
         let profile = ProfileConfig {
-            log_group_pattern: Some("profile-pattern".to_string()),
+            log_group_pattern: Some(vec!["profile-pattern-1".to_string(), "profile-pattern-2".to_string()]),
             stack_name: None,
             otlp_endpoint: Some("http://profile-endpoint:4318".to_string()),
             otlp_headers: Some(vec!["Profile-Auth=token123".to_string()]),
-            aws_region: None, // Don't override region
+            aws_region: None,
             aws_profile: Some("profile-aws-profile".to_string()),
             forward_only: Some(true),
-            timeline_width: Some(120),
-            compact_display: None, // Don't override
+            compact_display: None,
             event_attrs: Some("profile.*".to_string()),
             event_severity_attribute: Some("profile.severity".to_string()),
             poll_interval: Some(45),
-            session_timeout: None, // Don't override
+            session_timeout: None,
             monochrome: None,
             theme: Some("test-theme".to_string()),
+            span_attrs: Some("profile-span-attrs".to_string()),
         };
 
         // Apply the profile
@@ -548,27 +564,27 @@ timeline-width = 120
         // Verify overrides happened correctly
         assert_eq!(
             effective.log_group_pattern,
-            Some("profile-pattern".to_string())
+            Some(vec!["profile-pattern-1".to_string(), "profile-pattern-2".to_string()])
         );
-        assert_eq!(effective.stack_name, Some("original-stack".to_string())); // Unchanged
+        assert_eq!(effective.stack_name, Some("original-stack".to_string()));
         assert_eq!(
             effective.otlp_endpoint,
             Some("http://profile-endpoint:4318".to_string())
         );
         assert_eq!(effective.otlp_headers, vec!["Profile-Auth=token123"]);
-        assert_eq!(effective.aws_region, Some("us-east-1".to_string())); // Unchanged
+        assert_eq!(effective.aws_region, Some("us-east-1".to_string()));
         assert_eq!(
             effective.aws_profile,
             Some("profile-aws-profile".to_string())
         );
-        assert_eq!(effective.forward_only, true);
-        assert_eq!(effective.timeline_width, 120);
-        assert_eq!(effective.compact_display, false); // Unchanged
+        assert!(effective.forward_only);
+        assert!(!effective.compact_display);
         assert_eq!(effective.event_attrs, Some("profile.*".to_string()));
         assert_eq!(effective.event_severity_attribute, "profile.severity");
         assert_eq!(effective.poll_interval, Some(45));
-        assert_eq!(effective.session_timeout, 30); // Unchanged
+        assert_eq!(effective.session_timeout, 30);
         assert_eq!(effective.theme, "test-theme".to_string());
+        assert_eq!(effective.span_attrs, Some("profile-span-attrs".to_string()));
     }
 
     #[test]
@@ -597,7 +613,6 @@ timeline-width = 120
             aws_region: args.aws_region.clone(),
             aws_profile: args.aws_profile.clone(),
             forward_only: args.forward_only,
-            timeline_width: args.timeline_width,
             compact_display: args.compact_display,
             event_attrs: args.event_attrs.clone(),
             event_severity_attribute: args.event_severity_attribute.clone(),
@@ -605,6 +620,7 @@ timeline-width = 120
             session_timeout: args.session_timeout,
             verbose: args.verbose,
             theme: args.theme.clone(),
+            span_attrs: None,
         };
 
         // Apply global settings
@@ -619,7 +635,10 @@ timeline-width = 120
 
         // Verify the result has correct precedence
         // Pattern from 'dev' profile should override CLI args
-        assert_eq!(effective.log_group_pattern, Some("dev-pattern".to_string()));
+        assert_eq!(
+            effective.log_group_pattern,
+            Some(vec!["/aws/lambda/dev-func".to_string(), "specific-dev-group".to_string()])
+        );
 
         // otlp_endpoint from 'dev' profile should override CLI args
         assert_eq!(
@@ -629,9 +648,6 @@ timeline-width = 120
 
         // aws_region from 'dev' profile should override global
         assert_eq!(effective.aws_region, Some("us-west-1".to_string()));
-
-        // timeline_width from 'dev' profile should override CLI args
-        assert_eq!(effective.timeline_width, 120);
 
         // event_severity_attribute from global (not overridden by 'dev')
         assert_eq!(effective.event_severity_attribute, "global.severity");

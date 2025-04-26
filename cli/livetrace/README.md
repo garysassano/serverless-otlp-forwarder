@@ -22,22 +22,27 @@ It acts as a local observability companion, giving you immediate feedback on tra
 
 *   **CloudWatch Log Tailing:** Stream logs in near real-time using `StartLiveTail`.
 *   **CloudWatch Log Polling:** Periodically fetch logs using `FilterLogEvents` with `--poll-interval`.
-*   **Log Group Discovery:**
-    *   Find log groups matching a pattern (`--pattern`).
+*   **Flexible Log Group Discovery:**
+    *   Find log groups matching one or more patterns (`--log-group-pattern`).
     *   Find log groups belonging to a CloudFormation stack (`--stack-name`), including implicitly created Lambda log groups.
+    *   **Combine pattern and stack discovery:** Use both options simultaneously to aggregate log groups.
 *   **Log Group Validation:** Checks existence and handles Lambda@Edge naming conventions (`/aws/lambda/us-east-1.<function-name>`).
 *   **OTLP/stdout Parsing:** Decodes trace data logged via the `otlp-stdout-span-exporter` format (JSON wrapping base64-encoded, gzipped OTLP protobuf).
 *   **Console Trace Visualization:**
     *   Waterfall view showing span hierarchy, service names, durations, and relative timing.
-    *   Compact display option (`--compact-display`).
-    *   Configurable timeline width (`--timeline-width`).
-*   **Console Event Display:** Lists span events with timestamps, service names, and optional attribute filtering (`--event-attrs`).
+    *   Display of span kind (SERVER, CLIENT, etc.) and important span attributes in the waterfall.
+    *   Configurable color themes for better service differentiation (`--theme`, `--list-themes`).
+*   **Console Event Display:** Lists span events with timestamps, service names, and optional attribute filtering including both event and related span attributes.
 *   **OTLP Forwarding:** Optionally send processed trace data to an OTLP HTTP endpoint (`-e`, `-H`, Environment Variables).
 *   **Configuration:**
     *   AWS Region/Profile support.
     *   OTLP endpoint and headers configurable via CLI args or standard OTel environment variables.
     *   Session timeout for Live Tail mode (`--session-timeout`).
-*   **Verbosity Control:** Adjust logging detail (`-v`, `-vv`, `-vvv`).
+    *   Configuration profiles (`.livetrace.toml`) for saving common settings (`--config-profile`, `--save-profile`).
+*   **User Experience:**
+    *   **Detailed Startup Preamble:** Shows a summary of the effective configuration (AWS details, discovery sources, modes, forwarding, display settings, log groups).
+    *   **Interactive Spinner:** Displays a spinner while waiting for events.
+    *   **Verbosity Control:** Adjust logging detail (`-v`, `-vv`, `-vvv`).
 
 ## Installation
 
@@ -63,17 +68,26 @@ cargo install --path cli/livetrace
 livetrace [OPTIONS]
 ```
 
-### Discovery Options (Required, Mutually Exclusive)
+### Discovery Options (One or Both Required)
 
-You must specify one of the following to identify the log groups:
+You must specify at least one of the following to identify the log groups. They can be used together:
 
-*   `--pattern <PATTERN>`: Discover log groups whose names contain the given pattern (case-sensitive substring search).
+*   `--log-group-pattern <PATTERN>...`: Discover log groups whose names contain *any* of the given patterns (case-sensitive substring search). Can be specified multiple times, or provide multiple patterns after the flag.
     ```bash
-    livetrace --pattern "/aws/lambda/my-app-"
+    # Single pattern
+    livetrace --log-group-pattern "/aws/lambda/my-app-"
+    # Multiple patterns
+    livetrace --log-group-pattern "/aws/lambda/service-a-" "/aws/lambda/service-b-"
+    livetrace --log-group-pattern "pattern1" --log-group-pattern "pattern2"
     ```
 *   `--stack-name <STACK_NAME>`: Discover log groups associated with resources (`AWS::Logs::LogGroup`, `AWS::Lambda::Function`) in the specified CloudFormation stack.
     ```bash
     livetrace --stack-name my-production-stack
+    ```
+*   **Combining:**
+    ```bash
+    # Find groups in a stack AND those matching a pattern
+    livetrace --stack-name my-api-stack --log-group-pattern "/aws/lambda/auth-"
     ```
 
 ### Mode Selection (Optional, Mutually Exclusive Group)
@@ -119,15 +133,23 @@ export OTEL_EXPORTER_OTLP_HEADERS="x-api-key=secret123,x-tenant-id=abc"
 livetrace --stack-name my-stack
 ```
 
+### Console Display Options (Optional)
+
+Control the appearance of the console output:
+
+*   `--theme <THEME>`: Select a color theme (e.g., `default`, `tableau`, `monochrome`). Default is `default`.
+*   `--list-themes`: List all available color themes with descriptions and exit.
+*   `--compact-display`: Use a more compact waterfall view (omits Span Kind, Span ID, and Span Attributes columns).
+*   `--event-attrs <GLOB_LIST>`: Comma-separated list of glob patterns (e.g., `"http.*,db.statement,my.custom.*"`) to filter which event attributes are displayed. If omitted, all attributes are shown.
+*   `--span-attrs <GLOB_LIST>`: Comma-separated list of glob patterns (e.g., `"http.status_code,db.system"`) to select span attributes to display in the waterfall view. If omitted, no span attributes are shown.
+*   `--event-severity-attribute <ATTRIBUTE_NAME>`: (Default: `event.severity`) Specify the event attribute key used to determine the severity level for coloring event output.
+
 ### Other Options
 
 *   `--aws-region <AWS_REGION>`: Specify the AWS Region. Defaults to environment/profile configuration.
 *   `--aws-profile <AWS_PROFILE>`: Specify the AWS profile name.
 *   `-v, -vv, -vvv`: Increase logging verbosity (Info -> Debug -> Trace). Internal logs go to stderr.
 *   `--forward-only`: Only forward telemetry via OTLP; do not display traces/events in the console. Requires an endpoint to be configured.
-*   `--timeline-width <CHARS>`: (Default: 80) Set the width of the timeline bar in the console output.
-*   `--compact-display`: Use a more compact waterfall view (omits the Span ID column).
-*   `--event-attrs <GLOB_LIST>`: Comma-separated list of glob patterns (e.g., `"http.*,db.statement,my.custom.*"`) to filter which event attributes are displayed. If omitted, all attributes are shown.
 *   `--config-profile <PROFILE_NAME>`: Load configuration from a named profile in `.livetrace.toml`.
 *   `--save-profile <PROFILE_NAME>`: Save the current command-line arguments as a named profile in `.livetrace.toml` and exit.
 
@@ -135,18 +157,22 @@ livetrace --stack-name my-stack
 
 When running in console mode (`--forward-only` not specified), `livetrace` displays:
 
-1.  **Configuration Preamble:** Shows the AWS Account ID, Region, and the list of validated log groups being tailed/polled.
-2.  **Trace Waterfall:** For each trace received:
+1.  **Configuration Preamble:** Shows a detailed summary of the effective configuration being used, including AWS details, discovery sources, mode, forwarding settings, display options, and the final list of log groups being monitored.
+2.  **Spinner:** An animated spinner indicates when the tool is actively waiting for new log events.
+3.  **Trace Waterfall:** For each trace received:
     *   A header `─ Trace ID: <trace_id> ───────────`
     *   A table showing:
-        *   Service Name
+        *   Service Name (colored by theme)
         *   Span Name (indented based on parent-child relationship)
+        *   Span Kind (SERVER, CLIENT, etc.) - hidden in compact display
         *   Duration (ms)
-        *   Span ID (optional, hidden with `--compact-display`)
-        *   Timeline bar visualization
-3.  **Trace Events:** If a trace has events:
+        *   Span ID (shortened to 8 characters, hidden in compact display)
+        *   Span Attributes (filtered by `--span-attrs` if provided, hidden in compact display)
+        *   Timeline bar visualization (colored by theme)
+4.  **Trace Events:** If a trace has events:
     *   A header `─ Events for Trace: <trace_id> ─────`
-    *   A list of events showing: Timestamp, Span ID, Service Name, Event Name, and Attributes (filtered by `--event-attrs` if provided).
+    *   A list of events showing: Timestamp, Span ID (shortened to 8 characters), Service Name, Event Name, Severity Level (colored), and Attributes
+    *   Attributes include both event attributes and parent span attributes (prefixed with "span."), filtered by `--event-attrs` if provided
 
 ## Configuration Profiles
 
@@ -191,9 +217,11 @@ event-severity-attribute = "event.severity"
 
 # Profile-specific settings
 [profiles.dev-profile]
-pattern = "my-service-"
+log-group-pattern = ["my-service-"]
 timeline-width = 120
 event-attrs = "http.*"
+span-attrs = "http.status_code,db.system"
+theme = "solarized"
 
 [profiles.prod-profile]
 stack-name = "production-stack"

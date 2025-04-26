@@ -60,7 +60,9 @@ toml.workspace = true
 globset.workspace = true
 # New dependency
 hex = { workspace = true }
+# Spinner and progress indicators
+indicatif = { workspace = true }
+terminal_size = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3.8"
-scopeguard = "1.2"
+tempfile = { workspace = true }
