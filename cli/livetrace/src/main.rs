@@ -156,30 +156,13 @@ async fn main() -> Result<()> {
     }
 
     // 6. AWS Setup (Config, Clients, Discovery, Validation, ARN Construction)
-    // Create a temporary CliArgs-like structure for AWS setup since it expects CliArgs
-    let aws_setup_args = CliArgs {
-        log_group_pattern: config.log_group_pattern.clone(),
-        stack_name: config.stack_name.clone(),
-        aws_region: config.aws_region.clone(),
-        aws_profile: config.aws_profile.clone(),
-        // Other fields don't matter for AWS setup, use defaults
-        otlp_endpoint: None,
-        otlp_headers: Vec::new(),
-        verbose: 0,
-        forward_only: false,
-        compact_display: false,
-        event_attrs: None,
-        poll_interval: None,
-        session_timeout: 30,
-        event_severity_attribute: "event.severity".to_string(),
-        config_profile: None,
-        save_profile: None,
-        theme: "default".to_string(),
-        list_themes: false,
-        span_attrs: None,
-        color_by: ColoringMode::Service,
-    };
-    let aws_result = setup_aws_resources(&aws_setup_args).await?;
+    // Pass only the specific parameters needed by setup_aws_resources
+    let aws_result = setup_aws_resources(
+        &config.log_group_pattern,
+        &config.stack_name,
+        &config.aws_region,
+        &config.aws_profile
+    ).await?;
     let cwl_client = aws_result.cwl_client;
     let account_id = aws_result.account_id;
     let region_str = aws_result.region_str;

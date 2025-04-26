@@ -4,8 +4,6 @@ use aws_sdk_cloudformation::Client as CfnClient;
 use aws_sdk_cloudwatchlogs::Client as CwlClient;
 use aws_sdk_sts::Client as StsClient;
 
-use crate::cli::CliArgs; // Import CliArgs
-
 // --- AWS Setup Public Function ---
 
 pub struct AwsSetupResult {
@@ -17,17 +15,22 @@ pub struct AwsSetupResult {
     pub resolved_arns: Vec<String>,
 }
 
-pub async fn setup_aws_resources(args: &CliArgs) -> Result<AwsSetupResult> {
+pub async fn setup_aws_resources(
+    log_group_pattern: &Option<Vec<String>>,
+    stack_name: &Option<String>,
+    aws_region: &Option<String>,
+    aws_profile: &Option<String>,
+) -> Result<AwsSetupResult> {
     // --- 1. Load AWS Config ---
     let region_provider =
-        RegionProviderChain::first_try(args.aws_region.clone().map(aws_config::Region::new))
+        RegionProviderChain::first_try(aws_region.clone().map(aws_config::Region::new))
             .or_default_provider()
             .or_else(aws_config::Region::new("us-east-1")); // Default fallback region
 
     let mut config_loader =
         aws_config::defaults(aws_config::BehaviorVersion::latest()).region(region_provider);
 
-    if let Some(profile) = args.aws_profile.clone() {
+    if let Some(profile) = aws_profile.clone() {
         config_loader = config_loader.profile_name(profile);
     }
 
@@ -65,7 +68,7 @@ pub async fn setup_aws_resources(args: &CliArgs) -> Result<AwsSetupResult> {
     tracing::debug!(region = %region_str, account_id = %account_id, partition = %partition, "Determined region, account ID, and partition");
 
     // --- 5. Discover Log Groups based on pattern or stack name ---
-    let resolved_log_group_names = discover_log_group_names(&cfn_client, &cwl_client, args).await?;
+    let resolved_log_group_names = discover_log_group_names(&cfn_client, &cwl_client, log_group_pattern, stack_name).await?;
 
     // --- Add validation step ---
     tracing::debug!("Validating discovered log group names...");
@@ -79,22 +82,22 @@ pub async fn setup_aws_resources(args: &CliArgs) -> Result<AwsSetupResult> {
     // --- Validate count of *validated* names ---
     let group_count = validated_log_group_names.len(); // Use validated count
     if group_count == 0 {
-        let error_msg = if args.stack_name.is_some() {
-            format!("Stack '{}' contained 0 discoverable and valid LogGroup resources (checked Lambda@Edge variants).", args.stack_name.as_deref().unwrap_or("N/A"))
+        let error_msg = if stack_name.is_some() {
+            format!("Stack '{}' contained 0 discoverable and valid LogGroup resources (checked Lambda@Edge variants).", stack_name.as_deref().unwrap_or("N/A"))
         } else {
             format!(
                 "Log Groups Patterns {:?} matched 0 valid log groups (checked Lambda@Edge variants).",
-                args.log_group_pattern.as_ref().map_or(vec!["N/A".to_string()], |v| v.to_vec())
+                log_group_pattern.as_ref().map_or(vec!["N/A".to_string()], |v| v.to_vec())
             )
         };
         return Err(anyhow::anyhow!(error_msg));
     } else if group_count > 10 {
-        let (method, value) = if let Some(stack) = args.stack_name.as_deref() {
+        let (method, value) = if let Some(stack) = stack_name.as_deref() {
             ("Stack", stack.to_string())
         } else {
             (
                 "Log Groups Patterns",
-                format!("{:?}", args.log_group_pattern.as_ref().map_or(vec!["N/A".to_string()], |v| v.to_vec())),
+                format!("{:?}", log_group_pattern.as_ref().map_or(vec!["N/A".to_string()], |v| v.to_vec())),
             )
         };
         let error_msg = format!(
@@ -137,21 +140,22 @@ pub async fn setup_aws_resources(args: &CliArgs) -> Result<AwsSetupResult> {
 async fn discover_log_group_names(
     cfn_client: &CfnClient,
     cwl_client: &CwlClient,
-    args: &CliArgs,
+    log_group_pattern: &Option<Vec<String>>,
+    stack_name: &Option<String>,
 ) -> Result<Vec<String>> {
     // Create a HashSet to collect all log groups and avoid duplicates
     let mut all_log_groups = std::collections::HashSet::new();
     
     // Process stack name if provided
-    if let Some(stack_name) = args.stack_name.as_deref() {
-        let stack_groups = discover_log_groups_from_stack(cfn_client, stack_name).await?;
+    if let Some(stack) = stack_name.as_deref() {
+        let stack_groups = discover_log_groups_from_stack(cfn_client, stack).await?;
         for group in stack_groups {
             all_log_groups.insert(group);
         }
     }
     
     // Process log group patterns if provided
-    if let Some(patterns) = &args.log_group_pattern {
+    if let Some(patterns) = log_group_pattern {
         if !patterns.is_empty() {
             let pattern_groups = discover_log_groups_by_patterns(cwl_client, patterns).await?;
             for group in pattern_groups {
@@ -162,7 +166,7 @@ async fn discover_log_group_names(
     
     // Return error if neither was provided or both were empty
     if all_log_groups.is_empty() {
-        if args.stack_name.is_none() && args.log_group_pattern.is_none() {
+        if stack_name.is_none() && log_group_pattern.is_none() {
             return Err(anyhow::anyhow!(
                 "Internal error: No log group pattern or stack name provided."
             ));
