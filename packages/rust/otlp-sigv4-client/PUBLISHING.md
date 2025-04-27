@@ -66,7 +66,8 @@ The package is automatically published to crates.io by the GitHub Action workflo
 1. Runs all tests and quality checks on both x64 and arm64 architectures
 2. Verifies the package version hasn't been published before
 3. Publishes the package to crates.io
-4. Creates and pushes a git tag in the format `rust-packages-otlp-sigv4-client-vX.Y.Z`
+4. Create a branch for the release following the pattern `release/rust/<package-name>-v<version>`
+6. Commit changes to the release branch and push to GitHub, with a commit message of `release: rust/<package-name> v<version>`
 
 There's no need to manually publish or create tags.
 

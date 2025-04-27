@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.11.0] - 2024-06-05
+
+### Changed
+- Updated version to 0.11.0 to update the dependency on opentelemetry to 0.29.0
+- Improved documentation for better clarity
+
 ## [0.10.0] - 2024-03-04
 
 ### Added
