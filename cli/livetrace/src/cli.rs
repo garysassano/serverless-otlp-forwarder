@@ -59,17 +59,10 @@ pub struct CliArgs {
     #[arg(long)]
     pub forward_only: bool,
 
-    /// Use a compact display format (omits Span ID).
-    #[arg(long)]
-    pub compact_display: bool,
-
-    /// Comma-separated list of glob patterns for event attributes to display (e.g., "http.*,db.*,aws.lambda.*").
-    #[arg(long)]
-    pub event_attrs: Option<String>,
-
-    /// Comma-separated list of glob patterns for span attributes to display in the waterfall view (e.g., "http.status_code,db.system").
-    #[arg(long, help_heading = "Display Options")]
-    pub span_attrs: Option<String>,
+    /// Comma-separated list of glob patterns for attribute filtering (e.g., "http.*,db.*,aws.lambda.*").
+    /// Applies to both span attributes and event attributes.
+    #[arg(long = "attrs")]
+    pub attrs: Option<String>,
 
     /// Optional polling interval in seconds. If set, uses FilterLogEvents API instead of StartLiveTail.
     #[arg(long, group = "mode")] // Add to group
@@ -195,9 +188,9 @@ fn print_available_themes() {
     std::process::exit(0);
 }
 
-/// Parses event attribute glob patterns from a string pattern.
+/// Parses attribute glob patterns from a string pattern.
 /// This is a more general function that doesn't depend on CliArgs or EffectiveConfig directly.
-pub fn parse_event_attr_globs(patterns_opt: &Option<String>) -> Option<GlobSet> {
+pub fn parse_attr_globs(patterns_opt: &Option<String>) -> Option<GlobSet> {
     match patterns_opt.as_deref() {
         Some(patterns_str) if !patterns_str.is_empty() => {
             let mut builder = GlobSetBuilder::new();
@@ -209,7 +202,7 @@ pub fn parse_event_attr_globs(patterns_opt: &Option<String>) -> Option<GlobSet> 
                             builder.add(glob);
                         }
                         Err(e) => {
-                            tracing::warn!(pattern = trimmed_pattern, error = %e, "Invalid glob pattern for event attribute filtering, skipping.");
+                            tracing::warn!(pattern = trimmed_pattern, error = %e, "Invalid glob pattern for attribute filtering, skipping.");
                         }
                     }
                 }
@@ -217,7 +210,7 @@ pub fn parse_event_attr_globs(patterns_opt: &Option<String>) -> Option<GlobSet> 
             match builder.build() {
                 Ok(glob_set) => Some(glob_set),
                 Err(e) => {
-                    tracing::error!(error = %e, "Failed to build glob set for event attributes");
+                    tracing::error!(error = %e, "Failed to build glob set for attributes");
                     None // Treat as no filter if build fails
                 }
             }

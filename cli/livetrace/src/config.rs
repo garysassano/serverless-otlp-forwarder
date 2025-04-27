@@ -46,18 +46,14 @@ pub struct ProfileConfig {
     // --- Console Display --- (Mirroring CliArgs)
     #[serde(rename = "forward-only")]
     pub forward_only: Option<bool>,
-    #[serde(rename = "compact-display")]
-    pub compact_display: Option<bool>,
-    #[serde(rename = "event-attrs")]
-    pub event_attrs: Option<String>,
+    #[serde(rename = "attrs")]
+    pub attrs: Option<String>,
     #[serde(rename = "event-severity-attribute")]
     pub event_severity_attribute: Option<String>,
     #[serde(rename = "monochrome")]
     pub monochrome: Option<bool>,
     #[serde(rename = "theme")]
     pub theme: Option<String>,
-    #[serde(rename = "span-attrs")]
-    pub span_attrs: Option<String>,
     #[serde(rename = "color-by", skip_serializing_if = "Option::is_none")]
     pub color_by: Option<ColoringMode>,
 
@@ -86,10 +82,8 @@ pub struct EffectiveConfig {
 
     // --- Console Display ---
     pub forward_only: bool,
-    pub compact_display: bool,
-    pub event_attrs: Option<String>,
+    pub attrs: Option<String>,
     pub event_severity_attribute: String,
-    pub span_attrs: Option<String>,
     pub color_by: ColoringMode,
 
     // --- Mode ---
@@ -123,9 +117,7 @@ impl ProfileConfig {
             aws_profile: args.aws_profile.clone(),
             // Only save flags/options if they differ from clap's default
             forward_only: Some(args.forward_only).filter(|&f| f), // Default is false
-            compact_display: Some(args.compact_display).filter(|&c| c), // Default is false
-            event_attrs: args.event_attrs.clone(),
-            span_attrs: args.span_attrs.clone(),
+            attrs: args.attrs.clone(),
             poll_interval: args.poll_interval,
             session_timeout: Some(args.session_timeout).filter(|&t| t != 30), // Default is 30
             event_severity_attribute: Some(args.event_severity_attribute.clone())
@@ -152,14 +144,12 @@ pub fn load_and_resolve_config(
         aws_region: None,
         aws_profile: None,
         forward_only: false,
-        compact_display: false,
-        event_attrs: None,
+        attrs: None,
         event_severity_attribute: "event.severity".to_string(),
         poll_interval: None,
         session_timeout: 30,
         verbose: 0,
         theme: "default".to_string(),
-        span_attrs: None,
         color_by: ColoringMode::Service,
     };
 
@@ -242,12 +232,8 @@ fn apply_cli_args_to_effective(cli_args: &CliArgs, effective: &mut EffectiveConf
         effective.aws_profile = cli_args.aws_profile.clone();
     }
 
-    if cli_args.event_attrs.is_some() {
-        effective.event_attrs = cli_args.event_attrs.clone();
-    }
-
-    if cli_args.span_attrs.is_some() {
-        effective.span_attrs = cli_args.span_attrs.clone();
+    if cli_args.attrs.is_some() {
+        effective.attrs = cli_args.attrs.clone();
     }
 
     if cli_args.poll_interval.is_some() {
@@ -259,7 +245,6 @@ fn apply_cli_args_to_effective(cli_args: &CliArgs, effective: &mut EffectiveConf
 
     // Always apply these values from CLI args, as we can't detect if they were explicitly set
     effective.forward_only = cli_args.forward_only;
-    effective.compact_display = cli_args.compact_display;
     effective.event_severity_attribute = cli_args.event_severity_attribute.clone();
     effective.session_timeout = cli_args.session_timeout;
     effective.verbose = cli_args.verbose;
@@ -370,12 +355,8 @@ fn apply_profile_to_effective(profile: &ProfileConfig, effective: &mut Effective
         effective.forward_only = val;
     }
 
-    if let Some(val) = profile.compact_display {
-        effective.compact_display = val;
-    }
-
-    if let Some(val) = &profile.event_attrs {
-        effective.event_attrs = Some(val.clone());
+    if let Some(val) = &profile.attrs {
+        effective.attrs = Some(val.clone());
     }
 
     if let Some(val) = &profile.event_severity_attribute {
@@ -397,12 +378,8 @@ fn apply_profile_to_effective(profile: &ProfileConfig, effective: &mut Effective
         effective.theme = "monochrome".to_string();
     }
 
-    if let Some(val) = &profile.span_attrs {
-        effective.span_attrs = Some(val.clone());
-    }
-    
-    if let Some(val) = profile.color_by {
-        effective.color_by = val;
+    if let Some(val) = &profile.color_by {
+        effective.color_by = *val;
     }
 }
 
@@ -424,9 +401,7 @@ mod tests {
             aws_profile: Some("test-profile".to_string()),
             verbose: 1,
             forward_only: true,
-            compact_display: true,
-            event_attrs: Some("http.*,db.*".to_string()),
-            span_attrs: Some("http.status_code,db.system".to_string()),
+            attrs: Some("http.*,db.*".to_string()),
             poll_interval: Some(30),
             session_timeout: 45,
             event_severity_attribute: "custom.severity".to_string(),
@@ -483,8 +458,7 @@ aws-region = "us-west-1"
         assert_eq!(profile.aws_region, Some("us-west-2".to_string()));
         assert_eq!(profile.aws_profile, Some("test-profile".to_string()));
         assert_eq!(profile.forward_only, Some(true));
-        assert_eq!(profile.compact_display, Some(true));
-        assert_eq!(profile.event_attrs, Some("http.*,db.*".to_string()));
+        assert_eq!(profile.attrs, Some("http.*,db.*".to_string()));
         assert_eq!(profile.poll_interval, Some(30));
         assert_eq!(profile.session_timeout, Some(45));
         assert_eq!(
@@ -540,14 +514,12 @@ aws-region = "us-west-1"
             aws_region: Some("us-east-1".to_string()),
             aws_profile: None,
             forward_only: false,
-            compact_display: false,
-            event_attrs: None,
+            attrs: None,
             event_severity_attribute: "default.severity".to_string(),
             poll_interval: None,
             session_timeout: 30,
             verbose: 0,
             theme: "default".to_string(),
-            span_attrs: None,
             color_by: ColoringMode::Service,
         };
 
@@ -560,14 +532,12 @@ aws-region = "us-west-1"
             aws_region: None,
             aws_profile: Some("profile-aws-profile".to_string()),
             forward_only: Some(true),
-            compact_display: None,
-            event_attrs: Some("profile.*".to_string()),
+            attrs: Some("profile.*".to_string()),
             event_severity_attribute: Some("profile.severity".to_string()),
             poll_interval: Some(45),
             session_timeout: None,
             monochrome: None,
             theme: Some("test-theme".to_string()),
-            span_attrs: Some("profile-span-attrs".to_string()),
             color_by: None,
         };
 
@@ -591,13 +561,11 @@ aws-region = "us-west-1"
             Some("profile-aws-profile".to_string())
         );
         assert!(effective.forward_only);
-        assert!(!effective.compact_display);
-        assert_eq!(effective.event_attrs, Some("profile.*".to_string()));
+        assert_eq!(effective.attrs, Some("profile.*".to_string()));
         assert_eq!(effective.event_severity_attribute, "profile.severity");
         assert_eq!(effective.poll_interval, Some(45));
         assert_eq!(effective.session_timeout, 30);
         assert_eq!(effective.theme, "test-theme".to_string());
-        assert_eq!(effective.span_attrs, Some("profile-span-attrs".to_string()));
     }
 
     #[test]
@@ -626,14 +594,12 @@ aws-region = "us-west-1"
             aws_region: args.aws_region.clone(),
             aws_profile: args.aws_profile.clone(),
             forward_only: args.forward_only,
-            compact_display: args.compact_display,
-            event_attrs: args.event_attrs.clone(),
+            attrs: args.attrs.clone(),
             event_severity_attribute: args.event_severity_attribute.clone(),
             poll_interval: args.poll_interval,
             session_timeout: args.session_timeout,
             verbose: args.verbose,
             theme: args.theme.clone(),
-            span_attrs: None,
             color_by: args.color_by,
         };
 

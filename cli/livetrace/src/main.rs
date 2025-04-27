@@ -25,7 +25,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 // Internal Crate Imports
 use crate::aws_setup::setup_aws_resources;
-use crate::cli::{parse_event_attr_globs, CliArgs, ColoringMode};
+use crate::cli::{parse_attr_globs, CliArgs, ColoringMode};
 use crate::config::{load_and_resolve_config, save_profile_config, EffectiveConfig, ProfileConfig};
 use crate::console_display::{display_console, Theme, get_terminal_width};
 use crate::forwarder::{parse_otlp_headers_from_vec, send_batch};
@@ -78,14 +78,12 @@ async fn main() -> Result<()> {
             aws_region: args.aws_region.clone(),
             aws_profile: args.aws_profile.clone(),
             forward_only: args.forward_only,
-            compact_display: args.compact_display,
-            event_attrs: args.event_attrs.clone(),
+            attrs: args.attrs.clone(),
             event_severity_attribute: args.event_severity_attribute.clone(),
             poll_interval: args.poll_interval,
             session_timeout: args.session_timeout,
             verbose: args.verbose,
             theme: args.theme.clone(),
-            span_attrs: args.span_attrs.clone(),
             color_by: args.color_by,
         }
     };
@@ -178,10 +176,7 @@ async fn main() -> Result<()> {
 
     // 8. Prepare Console Display
     let console_enabled = !config.forward_only;
-    let event_attr_globs = parse_event_attr_globs(&config.event_attrs); // Now passes the Option<String> directly
-    let span_attr_globs = parse_event_attr_globs(&config.span_attrs); // Use the same function for parsing
-
-    
+    let attr_globs = parse_attr_globs(&config.attrs); // Now passes the Option<String> directly
 
     // Preamble Output (List Style)
     let preamble_width: usize = get_terminal_width(80);
@@ -236,15 +231,14 @@ async fn main() -> Result<()> {
     
     // Display Settings
     println!("  {:<18}: {}", "Theme".dimmed(), config.theme);
-    println!("  {:<18}: {}", "Compact Display".dimmed(), if config.compact_display { "Yes" } else { "No" });
     println!("  {:<18}: {}", "Color By".dimmed(), match config.color_by {
         ColoringMode::Service => "Service",
         ColoringMode::Span => "Span ID",
     });
-    if let Some(attrs) = &config.event_attrs {
-        println!("  {:<18}: {}", "Event Attributes".dimmed(), attrs);
+    if let Some(attrs) = &config.attrs {
+        println!("  {:<18}: {}", "Attributes".dimmed(), attrs);
     } else {
-        println!("  {:<18}: All", "Event Attributes".dimmed());
+        println!("  {:<18}: All", "Attributes".dimmed());
     }
     println!("  {:<18}: {}", "Severity Attr".dimmed(), config.event_severity_attribute);
     
@@ -371,11 +365,9 @@ async fn main() -> Result<()> {
                             let theme = Theme::from_str(&config.theme);
                             if let Err(e) = display_console(
                                 &batch_to_send,
-                                config.compact_display,
-                                &event_attr_globs,
+                                &attr_globs,
                                 config.event_severity_attribute.as_str(),
                                 theme,
-                                &span_attr_globs,
                                 config.color_by,
                             ) {
                                 tracing::error!(error = %e, "Error displaying telemetry data");
@@ -416,11 +408,9 @@ async fn main() -> Result<()> {
             let theme = Theme::from_str(&config.theme);
             if let Err(e) = display_console(
                 &final_batch,
-                config.compact_display,
-                &event_attr_globs,
+                &attr_globs,
                 &config.event_severity_attribute,
                 theme,
-                &span_attr_globs,
                 config.color_by,
             ) {
                 tracing::error!(error = %e, "Error displaying final telemetry data");

@@ -19,7 +19,7 @@ const SERVICE_NAME_WIDTH: usize = 25;
 const SPAN_NAME_WIDTH: usize = 40;
 const SPAN_ID_WIDTH: usize = 32;
 const SPAN_KIND_WIDTH: usize = 10;    // Width for the Span Kind column
-const SPAN_ATTRS_WIDTH: usize = 30;   // Width for the Span Attributes column
+const STATUS_WIDTH: usize = 8;        // Width for the Status column
 const DURATION_WIDTH: usize = 10;     // Width for the Duration column
 
 // Define a bright red color for errors
@@ -221,11 +221,9 @@ pub fn get_terminal_width(default_width: usize) -> usize {
 // Public Display Function
 pub fn display_console(
     batch: &[TelemetryData],
-    compact_display: bool,
-    event_attr_globs: &Option<GlobSet>,
+    attr_globs: &Option<GlobSet>,
     event_severity_attribute_name: &str,
     theme: Theme,
-    span_attr_globs: &Option<GlobSet>,
     color_by: ColoringMode,
 ) -> Result<()> {
     // Debug logging with theme and coloring mode
@@ -271,15 +269,10 @@ pub fn display_console(
     }
 
     // Calculate approximate total table width for header ruling
-    const SPACING_NON_COMPACT: usize = 6; // Approx spaces between 7 columns
-    const SPACING_COMPACT: usize = 3; // Approx spaces between 4 columns
+    const SPACING: usize = 6; // Approx spaces between 7 columns
 
     // Calculate the fixed width excluding the timeline
-    let fixed_width_excluding_timeline = if compact_display {
-        SERVICE_NAME_WIDTH + SPAN_NAME_WIDTH + DURATION_WIDTH + SPACING_COMPACT
-    } else {
-        SERVICE_NAME_WIDTH + SPAN_NAME_WIDTH + SPAN_KIND_WIDTH + DURATION_WIDTH + SPAN_ID_WIDTH + SPAN_ATTRS_WIDTH + SPACING_NON_COMPACT
-    };
+    let fixed_width_excluding_timeline = SERVICE_NAME_WIDTH + SPAN_NAME_WIDTH + SPAN_KIND_WIDTH + DURATION_WIDTH + SPAN_ID_WIDTH + STATUS_WIDTH + SPACING;
     
     // Get terminal width and calculate dynamic timeline width
     let terminal_width = get_terminal_width(120); // Use a larger default fallback
@@ -415,25 +408,16 @@ pub fn display_console(
             .build();
         table.set_format(table_format);
 
-        // Add table headers appropriate for compact vs non-compact mode
-        if compact_display {
-            table.set_titles(row![
-                "Service",
-                "Span Name",
-                "Duration (ms)",
-                "Timeline"
-            ]);
-        } else {
-            table.set_titles(row![ bl =>
-                "Service",
-                "Span Name",
-                "Kind",
-                "Duration (ms)",
-                "Span ID",
-                "Attributes",
-                "Timeline"
-            ]);
-        }
+        // Add table headers
+        table.set_titles(row![ bl =>
+            "Service",
+            "Span Name",
+            "Kind",
+            "Duration (ms)",
+            "Span ID",
+            "Status",
+            "Timeline"
+        ]);
 
         for root in roots {
             add_span_to_table(
@@ -443,10 +427,8 @@ pub fn display_console(
                 min_start_time,
                 trace_duration_ns,
                 calculated_timeline_width,
-                compact_display,
                 theme,
                 &span_map,
-                span_attr_globs,
                 color_by,
             )?;
         }
@@ -468,7 +450,7 @@ pub fn display_console(
                 let timestamp = Utc.timestamp_nanos(event.timestamp_ns as i64);
                 let formatted_time = timestamp.format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string();
                 let mut attrs_to_display: Vec<String> = Vec::new();
-                if let Some(globs) = event_attr_globs {
+                if let Some(globs) = attr_globs {
                     // Add event attributes that match the glob patterns
                     for attr in &event.attributes {
                         if globs.is_match(&attr.key) {
@@ -521,7 +503,7 @@ pub fn display_console(
                     "{} {} [{}] [{}] {}",
                     formatted_time.bright_black(),
                     colored_span_id_prefix,
-                    event.service_name.truecolor(service_color.0, service_color.1, service_color.2), // Always use service color for service name
+                    event.service_name,
                     colored_level,
                     event.name,
                 );
@@ -620,10 +602,8 @@ fn add_span_to_table(
     trace_start_time_ns: u64,
     trace_duration_ns: u64,
     timeline_width: usize,
-    compact_display: bool,
     theme: Theme,
     span_map: &HashMap<String, Span>,
-    span_attr_globs: &Option<GlobSet>,
     color_by: ColoringMode,
 ) -> Result<()> {
     let indent = "  ".repeat(depth);
@@ -662,67 +642,34 @@ fn add_span_to_table(
     // Get the actual span object for additional data
     let span_obj = span_map.get(&node.id);
     
-    if compact_display {
-        table.add_row(row![
-            service_name_content,
-            span_name_cell_content,
-            duration_content, // Uncolored
-            bar_cell_content
-        ]);
+    // Format span kind (uncolored)
+    let kind_cell_content = span_obj.map_or("UNKNOWN".to_string(), |span| format_span_kind(span.kind))
+                                   .chars().take(SPAN_KIND_WIDTH).collect::<String>();
+    
+    // Format span ID prefix (uncolored initially)
+    let span_id_prefix = node.id.chars().take(8).collect::<String>();
+    // ADD COLORING BACK for Span ID
+    let colored_span_id_prefix = if node.status_code == status::StatusCode::Error {
+        span_id_prefix
+            .truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2)
+            .to_string()
     } else {
-        // Format span kind (uncolored)
-        let kind_cell_content = span_obj.map_or("UNKNOWN".to_string(), |span| format_span_kind(span.kind))
-                                       .chars().take(SPAN_KIND_WIDTH).collect::<String>();
-        
-        // Format span ID prefix (uncolored initially)
-        let span_id_prefix = node.id.chars().take(8).collect::<String>();
-        // ADD COLORING BACK for Span ID
-        let colored_span_id_prefix = if node.status_code == status::StatusCode::Error {
-            span_id_prefix
-                .truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2)
-                .to_string()
-        } else {
-            span_id_prefix.truecolor(r, g, b).to_string() // Use service color
-        };
-        
-        // Format span attributes (uncolored)
-        let attrs_cell_content = if let Some(globs) = span_attr_globs {
-            if let Some(span) = span_obj {
-                let mut attrs_display = Vec::new();
-                for attr in &span.attributes {
-                    if globs.is_match(&attr.key) {
-                        // Use a plain key: value format without color
-                        let value_str = format_anyvalue(&attr.value);
-                        attrs_display.push(format!("{}:{}", attr.key, value_str)); 
-                    }
-                }
-                if attrs_display.is_empty() {
-                    "".to_string()
-                } else {
-                    let joined = attrs_display.join(", ");
-                    if joined.len() > SPAN_ATTRS_WIDTH {
-                        format!("{}...", joined.chars().take(SPAN_ATTRS_WIDTH - 3).collect::<String>())
-                    } else {
-                        joined
-                    }
-                }
-            } else {
-                "".to_string()
-            }
-        } else {
-            "".to_string()
-        };
+        span_id_prefix.truecolor(r, g, b).to_string() // Use service color
+    };
 
-        table.add_row(row![
-            service_name_content,
-            span_name_cell_content,
-            kind_cell_content,
-            duration_content, // Uncolored
-            colored_span_id_prefix, // Use the colored version
-            attrs_cell_content, // Uncolored
-            bar_cell_content
-        ]);
-    }
+    // Format status cell
+    let status_content = format_span_status(node.status_code);
+    // No need to truncate as format_span_status returns short strings
+
+    table.add_row(row![
+        service_name_content,
+        span_name_cell_content,
+        kind_cell_content,
+        r -> duration_content, // Right-align the duration
+        colored_span_id_prefix,
+        status_content,
+        bar_cell_content
+    ]);
 
     let mut children = node.children.clone();
     children.sort_by_key(|c| c.start_time);
@@ -735,10 +682,8 @@ fn add_span_to_table(
             trace_start_time_ns,
             trace_duration_ns,
             timeline_width,
-            compact_display,
             theme,
             span_map,
-            span_attr_globs,
             color_by,
         )?;
     }
@@ -779,12 +724,8 @@ fn render_bar(
     }
 
     // Apply color to the entire bar string
-    if status_code == status::StatusCode::Error {
-        bar_content.truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2).to_string()
-    } else {
-        let (r, g, b) = service_color;
-        bar_content.truecolor(r, g, b).to_string()
-    }
+    let (r, g, b) = service_color;
+    bar_content.truecolor(r, g, b).to_string()
 }
 
 fn format_span_kind(kind: i32) -> String {
@@ -830,6 +771,14 @@ fn format_anyvalue(av: &Option<AnyValue>) -> String {
             None => "<empty_value>".to_string(),
         },
         None => "<no_value>".to_string(),
+    }
+}
+
+fn format_span_status(status_code: status::StatusCode) -> String {
+    match status_code {
+        status::StatusCode::Ok => "OK".green().to_string(),
+        status::StatusCode::Error => "ERROR".truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2).bold().to_string(),
+        status::StatusCode::Unset => "UNSET".dimmed().to_string(),
     }
 }
 

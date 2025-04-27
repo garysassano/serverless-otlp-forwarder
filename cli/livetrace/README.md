@@ -139,9 +139,7 @@ Control the appearance of the console output:
 
 *   `--theme <THEME>`: Select a color theme (e.g., `default`, `tableau`, `monochrome`). Default is `default`.
 *   `--list-themes`: List all available color themes with descriptions and exit.
-*   `--compact-display`: Use a more compact waterfall view (omits Span Kind, Span ID, and Span Attributes columns).
-*   `--event-attrs <GLOB_LIST>`: Comma-separated list of glob patterns (e.g., `"http.*,db.statement,my.custom.*"`) to filter which event attributes are displayed. If omitted, all attributes are shown.
-*   `--span-attrs <GLOB_LIST>`: Comma-separated list of glob patterns (e.g., `"http.status_code,db.system"`) to select span attributes to display in the waterfall view. If omitted, no span attributes are shown.
+*   `--attrs <GLOB_LIST>`: Comma-separated list of glob patterns (e.g., `"http.*,db.statement,my.custom.*"`) to filter which attributes are displayed. Applied to both span attributes and event attributes. If omitted, all attributes are shown.
 *   `--event-severity-attribute <ATTRIBUTE_NAME>`: (Default: `event.severity`) Specify the event attribute key used to determine the severity level for coloring event output.
 
 ### Other Options
@@ -162,17 +160,17 @@ When running in console mode (`--forward-only` not specified), `livetrace` displ
 3.  **Trace Waterfall:** For each trace received:
     *   A header `─ Trace ID: <trace_id> ───────────`
     *   A table showing:
-        *   Service Name (colored by theme)
+        *   Service Name
         *   Span Name (indented based on parent-child relationship)
-        *   Span Kind (SERVER, CLIENT, etc.) - hidden in compact display
+        *   Span Kind (SERVER, CLIENT, etc.)
+        *   Status (OK, ERROR)
         *   Duration (ms)
-        *   Span ID (shortened to 8 characters, hidden in compact display)
-        *   Span Attributes (filtered by `--span-attrs` if provided, hidden in compact display)
-        *   Timeline bar visualization (colored by theme)
+        *   Span ID (shortened to 8 characters)
+        *   Timeline bar visualization (colored based on --color-by setting)
 4.  **Trace Events:** If a trace has events:
     *   A header `─ Events for Trace: <trace_id> ─────`
-    *   A list of events showing: Timestamp, Span ID (shortened to 8 characters), Service Name, Event Name, Severity Level (colored), and Attributes
-    *   Attributes include both event attributes and parent span attributes (prefixed with "span."), filtered by `--event-attrs` if provided
+    *   A list of events showing: Timestamp, Span ID (shortened to 8 characters, colored based on --color-by setting), Service Name, Event Name, Severity Level (colored), and Attributes
+    *   Attributes include both event attributes and parent span attributes (prefixed with "span."), filtered by `--attrs` if provided
 
 ## Configuration Profiles
 
@@ -184,7 +182,7 @@ To save your current command-line options as a named profile:
 
 ```bash
 # Save the current settings as "dev-profile"
-livetrace --pattern "my-service-" --timeline-width 120 --event-attrs "http.*" --save-profile dev-profile
+livetrace --pattern "my-service-" --timeline-width 120 --attrs "http.*" --save-profile dev-profile
 ```
 
 ### Using a Profile
@@ -200,7 +198,7 @@ You can also override specific settings from the profile by providing additional
 
 ```bash
 # Load from profile but override the event attributes
-livetrace --config-profile dev-profile --event-attrs "db.*,aws.*"
+livetrace --config-profile dev-profile --attrs "db.*,aws.*"
 ```
 
 ### Configuration File Format
@@ -219,8 +217,7 @@ event-severity-attribute = "event.severity"
 [profiles.dev-profile]
 log-group-pattern = ["my-service-"]
 timeline-width = 120
-event-attrs = "http.*"
-span-attrs = "http.status_code,db.system"
+attrs = "http.*"
 theme = "solarized"
 
 [profiles.prod-profile]
