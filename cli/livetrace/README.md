@@ -141,6 +141,7 @@ Control the appearance of the console output:
 *   `--list-themes`: List all available color themes with descriptions and exit.
 *   `--attrs <GLOB_LIST>`: Comma-separated list of glob patterns (e.g., `"http.*,db.statement,my.custom.*"`) to filter which attributes are displayed. Applied to both span attributes and event attributes. If omitted, all attributes are shown.
 *   `--event-severity-attribute <ATTRIBUTE_NAME>`: (Default: `event.severity`) Specify the event attribute key used to determine the severity level for coloring event output.
+*   `--events-only`: Only display events in the timeline log, hiding span start information.
 
 ### Other Options
 
@@ -167,10 +168,16 @@ When running in console mode (`--forward-only` not specified), `livetrace` displ
         *   Duration (ms)
         *   Span ID (shortened to 8 characters)
         *   Timeline bar visualization (colored based on --color-by setting)
-4.  **Trace Events:** If a trace has events:
-    *   A header `─ Events for Trace: <trace_id> ─────`
-    *   A list of events showing: Timestamp, Span ID (shortened to 8 characters, colored based on --color-by setting), Service Name, Event Name, Severity Level (colored), and Attributes
-    *   Attributes include both event attributes and parent span attributes (prefixed with "span."), filtered by `--attrs` if provided
+4.  **Timeline Log:** For each trace received:
+    *   A header `─ Timeline Log for Trace: <trace_id> ─────` (or `─ Events for Trace: <trace_id> ─────` if `--events-only` is used)
+    *   A chronological list of span starts and events showing:
+        *   Timestamp (colored dimmed)
+        *   Span ID (shortened to 8 characters, colored based on --color-by setting)
+        *   Service Name (in square brackets)
+        *   Type tag (`[SPAN]` or `[EVENT]`) - `[SPAN]` entries are hidden if `--events-only` is used
+        *   Status/Level (colored appropriately: green for OK, red for ERROR, etc.)
+        *   Name (Span name or Event name)
+        *   Attributes (if present): filtered by `--attrs` if provided
 
 ## Configuration Profiles
 
@@ -197,7 +204,7 @@ livetrace --config-profile dev-profile
 You can also override specific settings from the profile by providing additional command-line arguments:
 
 ```bash
-# Load from profile but override the event attributes
+# Load from profile but override the attribute filter
 livetrace --config-profile dev-profile --attrs "db.*,aws.*"
 ```
 
@@ -219,6 +226,7 @@ log-group-pattern = ["my-service-"]
 timeline-width = 120
 attrs = "http.*"
 theme = "solarized"
+events-only = true
 
 [profiles.prod-profile]
 stack-name = "production-stack"

@@ -195,18 +195,26 @@ struct ConsoleSpan {
     service_name: String,
 }
 
+
+// Structs for the timeline view
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ItemType {
+    SpanStart,
+    Event,
+}
+
 #[derive(Debug)]
-struct EventInfo {
+struct TimelineItem {
     timestamp_ns: u64,
-    name: String,
-    span_id: String,
-    #[allow(dead_code)]
-    trace_id: String,
-    attributes: Vec<KeyValue>,     // Event's own attributes
-    span_attributes: Vec<KeyValue>, // Attributes from the parent span
+    item_type: ItemType,
     service_name: String,
-    is_error: bool,
-    level: String,
+    span_id: String,
+    name: String,          // Span Name or Event Name
+    level_or_status: String, // Formatted Level (e.g., INFO) or Status (e.g., OK)
+    is_error: bool, // To help color span ID for SpanStart items
+    attributes: Vec<KeyValue>, // Filtered attributes for the specific item
+    // Optional: Store parent span attributes separately *only* for events
+    parent_span_attributes: Option<Vec<KeyValue>>,
 }
 
 // Function to get terminal width with a default fallback
@@ -225,9 +233,10 @@ pub fn display_console(
     event_severity_attribute_name: &str,
     theme: Theme,
     color_by: ColoringMode,
+    events_only: bool, // New parameter
 ) -> Result<()> {
     // Debug logging with theme and coloring mode
-    tracing::debug!("Display console called with theme={:?}, color_by={:?}", theme, color_by);
+    tracing::debug!("Display console called with theme={:?}, color_by={:?}, events_only={}", theme, color_by, events_only);
 
     let mut spans_with_service: Vec<(Span, String)> = Vec::new();
 
@@ -298,22 +307,36 @@ pub fn display_console(
             continue;
         }
 
-        let mut trace_events: Vec<EventInfo> = Vec::new();
-        let span_error_status: HashMap<String, bool> = spans_in_trace_with_service
-            .iter()
-            .map(|(span, _)| {
-                let span_id_hex = hex::encode(&span.span_id);
-                let is_error = span.status.as_ref().is_some_and(|s| {
-                    status::StatusCode::try_from(s.code).unwrap_or(status::StatusCode::Unset)
-                        == status::StatusCode::Error
-                });
-                (span_id_hex, is_error)
-            })
-            .collect();
+        // Replace the trace_events and span_error_status with timeline_items
+        let mut timeline_items: Vec<TimelineItem> = Vec::new();
 
         for (span, service_name) in &spans_in_trace_with_service {
             let span_id_hex = hex::encode(&span.span_id);
-            let is_error = *span_error_status.get(&span_id_hex).unwrap_or(&false);
+            let status_code = span.status.as_ref().map_or(status::StatusCode::Unset, |s| {
+                status::StatusCode::try_from(s.code).unwrap_or(status::StatusCode::Unset)
+            });
+            let is_error = status_code == status::StatusCode::Error;
+
+            if !events_only { // Only add span starts if not events_only mode
+                let filtered_span_attrs: Vec<KeyValue> = match attr_globs {
+                    Some(globs) => span.attributes.iter().filter(|kv| globs.is_match(&kv.key)).cloned().collect(),
+                    None => span.attributes.clone(), // Collect all if no globs
+                };
+
+                timeline_items.push(TimelineItem {
+                    timestamp_ns: span.start_time_unix_nano,
+                    item_type: ItemType::SpanStart,
+                    service_name: service_name.clone(),
+                    span_id: span_id_hex.clone(),
+                    name: span.name.clone(),
+                    level_or_status: format_span_status(status_code),
+                    is_error,
+                    attributes: filtered_span_attrs,
+                    parent_span_attributes: None, // Not applicable for SpanStart
+                });
+            }
+
+            // Add events - similar to the existing events logic but store in timeline_items
             for event in &span.events {
                 let mut level = if is_error {
                     "ERROR".to_string()
@@ -332,20 +355,32 @@ pub fn display_console(
                     }
                 }
 
-                trace_events.push(EventInfo {
+                // Filter attributes based on globs
+                let filtered_event_attrs: Vec<KeyValue> = match attr_globs {
+                    Some(globs) => event.attributes.iter().filter(|kv| globs.is_match(&kv.key)).cloned().collect(),
+                    None => event.attributes.clone(),
+                };
+                let filtered_parent_span_attrs: Vec<KeyValue> = match attr_globs {
+                    Some(globs) => span.attributes.iter().filter(|kv| globs.is_match(&kv.key)).cloned().collect(),
+                    None => span.attributes.clone(),
+                };
+
+                timeline_items.push(TimelineItem {
                     timestamp_ns: event.time_unix_nano,
-                    name: event.name.clone(),
-                    span_id: span_id_hex.clone(),
-                    trace_id: trace_id.clone(),
-                    attributes: event.attributes.clone(),
-                    span_attributes: span.attributes.clone(),
+                    item_type: ItemType::Event,
                     service_name: service_name.clone(),
+                    span_id: span_id_hex.clone(),
+                    name: event.name.clone(),
+                    level_or_status: level,
                     is_error,
-                    level,
+                    attributes: filtered_event_attrs,
+                    parent_span_attributes: Some(filtered_parent_span_attrs),
                 });
             }
         }
-        trace_events.sort_by_key(|e| e.timestamp_ns);
+
+        // Sort by timestamp
+        timeline_items.sort_by_key(|item| item.timestamp_ns);
 
         let mut span_map: HashMap<String, Span> = HashMap::new();
         let mut service_name_map: HashMap<String, String> = HashMap::new();
@@ -434,54 +469,37 @@ pub fn display_console(
         }
         table.printstd();
 
-        // Display sorted events *for this trace*
-        if !trace_events.is_empty() {
-            // Print Events Header
-            let events_heading = format!("Events for Trace: {}", trace_id);
-            // Calculate padding based on total table width
-            let events_padding = total_table_width.saturating_sub(events_heading.len() + 3);
+        // Replace the existing events display with timeline display
+        if !timeline_items.is_empty() {
+            // Print Header
+            let header_text = if events_only {
+                format!("Events for Trace: {}", trace_id)
+            } else {
+                format!("Timeline Log for Trace: {}", trace_id)
+            };
+            let events_padding = total_table_width.saturating_sub(header_text.len() + 3);
             println!(
                 "\n{} {} {}",
                 "─".dimmed(),
-                events_heading.bold(),
+                header_text.bold(),
                 "─".repeat(events_padding).dimmed()
             );
-            for event in trace_events {
-                let timestamp = Utc.timestamp_nanos(event.timestamp_ns as i64);
+
+            // Print each item
+            for item in timeline_items {
+                let timestamp = Utc.timestamp_nanos(item.timestamp_ns as i64);
                 let formatted_time = timestamp.format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string();
-                let mut attrs_to_display: Vec<String> = Vec::new();
-                if let Some(globs) = attr_globs {
-                    // Add event attributes that match the glob patterns
-                    for attr in &event.attributes {
-                        if globs.is_match(&attr.key) {
-                            attrs_to_display.push(format_keyvalue(attr));
-                        }
-                    }
-                    
-                    // Add span attributes that match the glob patterns, with a "span." prefix
-                    for attr in &event.span_attributes {
-                        if globs.is_match(&attr.key) {
-                            // Add a "span." prefix to distinguish from event attributes
-                            let value_str = format_anyvalue(&attr.value);
-                            attrs_to_display.push(format!("span.{}: {}", attr.key.bright_black(), value_str));
-                        }
-                    }
-                }
 
-                // Get service color always for consistent service name display
-                let service_color = theme.get_color_for_service(&event.service_name);
-                
-                // Get color for span ID display based on coloring mode
+                // Get color for span ID prefix
                 let (prefix_r, prefix_g, prefix_b) = match color_by {
-                    ColoringMode::Service => service_color,
-                    ColoringMode::Span => theme.get_color_for_span(&event.span_id),
+                    ColoringMode::Service => theme.get_color_for_service(&item.service_name),
+                    ColoringMode::Span => theme.get_color_for_span(&item.span_id),
                 };
-
-                // Shorten span ID for display
-                let span_id_prefix = event.span_id.chars().take(8).collect::<String>();
                 
-                // Apply appropriate color to span ID prefix unless it's an error
-                let colored_span_id_prefix = if event.is_error {
+                let span_id_prefix = item.span_id.chars().take(8).collect::<String>();
+                
+                // Color span ID
+                let colored_span_id_prefix = if item.is_error {
                     span_id_prefix
                         .truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2)
                         .to_string()
@@ -489,34 +507,58 @@ pub fn display_console(
                     span_id_prefix.truecolor(prefix_r, prefix_g, prefix_b).to_string()
                 };
 
-                // Color the level based on its value
-                let colored_level = match event.level.to_uppercase().as_str() {
-                    "ERROR" => event
-                        .level
-                        .truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2)
-                        .bold(),
-                    "WARN" | "WARNING" => event.level.yellow().bold(),
-                    _ => event.level.bright_black().bold(), // Keep others bold but with subdued color
+                // Type tag
+                let type_tag = match item.item_type {
+                    ItemType::SpanStart => "[SPAN]".to_string(),
+                    ItemType::Event => "[EVENT]".to_string(),
                 };
 
-                let log_line_start = format!(
-                    "{} {} [{}] [{}] {}",
+                // Format and color level/status
+                let colored_level_status = match item.level_or_status.to_uppercase().as_str() {
+                    "ERROR" => item.level_or_status
+                        .truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2)
+                        .bold(),
+                    "WARN" | "WARNING" => item.level_or_status.yellow().bold(),
+                    "OK" => item.level_or_status.green(), // For span status OK
+                    "UNSET" => item.level_or_status.dimmed(), // For span status UNSET
+                    _ => item.level_or_status.bright_black().bold(), // Default for INFO etc.
+                };
+                let level_status_tag = format!("[{}]", colored_level_status);
+
+                // Format attributes
+                let mut attrs_to_display: Vec<String> = Vec::new();
+                
+                // Add the item's own attributes
+                for attr in &item.attributes {
+                    attrs_to_display.push(format_keyvalue(attr));
+                }
+                
+                // If it's an Event, also add parent span attributes with "span." prefix
+                if let Some(parent_attrs) = &item.parent_span_attributes {
+                    for attr in parent_attrs {
+                        let value_str = format_anyvalue(&attr.value);
+                        attrs_to_display.push(format!("span.{}: {}", attr.key.bright_black(), value_str));
+                    }
+                }
+
+                // Format the attrs suffix
+                let attrs_suffix = if !attrs_to_display.is_empty() {
+                    format!(" - Attrs: {}", attrs_to_display.join(", "))
+                } else {
+                    String::new()
+                };
+
+                // Assemble and print the final line
+                println!(
+                    "{} {} [{}] {} {} {}{}",
                     formatted_time.bright_black(),
                     colored_span_id_prefix,
-                    event.service_name,
-                    colored_level,
-                    event.name,
+                    item.service_name, // Uncolored service name
+                    type_tag,
+                    level_status_tag,
+                    item.name,
+                    attrs_suffix
                 );
-
-                if !attrs_to_display.is_empty() {
-                    println!(
-                        "{} - Attrs: {}",
-                        log_line_start,
-                        attrs_to_display.join(", ")
-                    );
-                } else {
-                    println!("{}", log_line_start);
-                }
             }
         }
     }

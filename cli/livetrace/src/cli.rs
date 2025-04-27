@@ -118,6 +118,10 @@ pub struct CliArgs {
         help_heading = "Display Options",
     )]
     pub color_by: ColoringMode,
+
+    /// Only display events, hiding span start information in the timeline log view.
+    #[arg(long, help_heading = "Display Options")]
+    pub events_only: bool,
 }
 
 // Create a custom value parser for themes

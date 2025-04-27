@@ -63,6 +63,9 @@ pub struct ProfileConfig {
     #[serde(rename = "session-timeout")]
     pub session_timeout: Option<u64>,
     // Note: Verbosity (`verbose`) is generally not configured via file.
+    
+    #[serde(rename = "events-only", skip_serializing_if = "Option::is_none")]
+    pub events_only: Option<bool>,
 }
 
 /// Represents the final, merged configuration after applying precedence rules.
@@ -85,6 +88,7 @@ pub struct EffectiveConfig {
     pub attrs: Option<String>,
     pub event_severity_attribute: String,
     pub color_by: ColoringMode,
+    pub events_only: bool,
 
     // --- Mode ---
     pub poll_interval: Option<u64>,
@@ -125,6 +129,7 @@ impl ProfileConfig {
             monochrome: None, // No longer used, but kept for compatibility
             theme: Some(args.theme.clone()).filter(|s| s != "default"), // Default is "default"
             color_by: Some(args.color_by).filter(|&c| c != ColoringMode::Service), // Default is Service
+            events_only: Some(args.events_only).filter(|&e| e), // Default is false
         }
     }
 }
@@ -151,6 +156,7 @@ pub fn load_and_resolve_config(
         verbose: 0,
         theme: "default".to_string(),
         color_by: ColoringMode::Service,
+        events_only: false,
     };
 
     // If no profile specified, just return CLI args as effective config
@@ -250,6 +256,7 @@ fn apply_cli_args_to_effective(cli_args: &CliArgs, effective: &mut EffectiveConf
     effective.verbose = cli_args.verbose;
     effective.theme = cli_args.theme.clone();
     effective.color_by = cli_args.color_by;
+    effective.events_only = cli_args.events_only;
 }
 
 // Remove the old placeholder:
@@ -381,6 +388,10 @@ fn apply_profile_to_effective(profile: &ProfileConfig, effective: &mut Effective
     if let Some(val) = &profile.color_by {
         effective.color_by = *val;
     }
+    
+    if let Some(val) = profile.events_only {
+        effective.events_only = val;
+    }
 }
 
 #[cfg(test)]
@@ -410,6 +421,7 @@ mod tests {
             theme: "test-theme".to_string(),
             list_themes: false,
             color_by: ColoringMode::Service,
+            events_only: true,
         }
     }
 
@@ -466,6 +478,7 @@ aws-region = "us-west-1"
             Some("custom.severity".to_string())
         );
         assert_eq!(profile.theme, Some("test-theme".to_string()));
+        assert_eq!(profile.events_only, Some(true));
     }
 
     #[test]
@@ -521,6 +534,7 @@ aws-region = "us-west-1"
             verbose: 0,
             theme: "default".to_string(),
             color_by: ColoringMode::Service,
+            events_only: false,
         };
 
         // Create a profile with some settings
@@ -539,6 +553,7 @@ aws-region = "us-west-1"
             monochrome: None,
             theme: Some("test-theme".to_string()),
             color_by: None,
+            events_only: Some(true),
         };
 
         // Apply the profile
@@ -566,6 +581,7 @@ aws-region = "us-west-1"
         assert_eq!(effective.poll_interval, Some(45));
         assert_eq!(effective.session_timeout, 30);
         assert_eq!(effective.theme, "test-theme".to_string());
+        assert!(effective.events_only);
     }
 
     #[test]
@@ -601,6 +617,7 @@ aws-region = "us-west-1"
             verbose: args.verbose,
             theme: args.theme.clone(),
             color_by: args.color_by,
+            events_only: args.events_only,
         };
 
         // Apply global settings

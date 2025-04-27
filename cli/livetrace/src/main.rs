@@ -85,6 +85,7 @@ async fn main() -> Result<()> {
             verbose: args.verbose,
             theme: args.theme.clone(),
             color_by: args.color_by,
+            events_only: args.events_only,
         }
     };
 
@@ -241,6 +242,7 @@ async fn main() -> Result<()> {
         println!("  {:<18}: All", "Attributes".dimmed());
     }
     println!("  {:<18}: {}", "Severity Attr".dimmed(), config.event_severity_attribute);
+    println!("  {:<18}: {}", "Events Only".dimmed(), if config.events_only { "Yes" } else { "No" });
     
     // Config Source
     if let Some(profile) = &args.config_profile {
@@ -369,6 +371,7 @@ async fn main() -> Result<()> {
                                 config.event_severity_attribute.as_str(),
                                 theme,
                                 config.color_by,
+                                config.events_only,
                             ) {
                                 tracing::error!(error = %e, "Error displaying telemetry data");
                             }
@@ -412,6 +415,7 @@ async fn main() -> Result<()> {
                 &config.event_severity_attribute,
                 theme,
                 config.color_by,
+                config.events_only,
             ) {
                 tracing::error!(error = %e, "Error displaying final telemetry data");
             }
