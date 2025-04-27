@@ -233,10 +233,12 @@ pub fn display_console(
     event_severity_attribute_name: &str,
     theme: Theme,
     color_by: ColoringMode,
-    events_only: bool, // New parameter
+    events_only: bool,
+    root_span_received: bool, // New parameter to indicate if the root span was found
 ) -> Result<()> {
     // Debug logging with theme and coloring mode
-    tracing::debug!("Display console called with theme={:?}, color_by={:?}, events_only={}", theme, color_by, events_only);
+    tracing::debug!("Display console called with theme={:?}, color_by={:?}, events_only={}, root_span_received={}", 
+                  theme, color_by, events_only, root_span_received);
 
     let mut spans_with_service: Vec<(Span, String)> = Vec::new();
 
@@ -677,7 +679,6 @@ fn add_span_to_table(
         trace_start_time_ns,
         trace_duration_ns,
         timeline_width,
-        node.status_code,
         (r, g, b), // Pass service color to render_bar
     );
 
@@ -739,7 +740,6 @@ fn render_bar(
     trace_start_time_ns: u64,
     trace_duration_ns: u64,
     timeline_width: usize,
-    status_code: status::StatusCode,
     service_color: (u8, u8, u8), 
 ) -> String {
     // If there's no duration, return empty space

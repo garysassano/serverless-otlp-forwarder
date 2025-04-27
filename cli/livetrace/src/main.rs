@@ -9,6 +9,7 @@ mod poller;
 mod processing;
 
 // Standard Library
+use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
 
@@ -16,10 +17,13 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 use colored::*;
+use futures::future::join_all;
 use indicatif::{ProgressBar, ProgressStyle};
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+use prost::Message;
 use reqwest::Client as ReqwestClient;
 use tokio::sync::mpsc;
-use tokio::time::interval;
+use tokio::time::{interval, Instant};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -32,6 +36,19 @@ use crate::forwarder::{parse_otlp_headers_from_vec, send_batch};
 use crate::live_tail_adapter::start_live_tail_task;
 use crate::poller::start_polling_task;
 use crate::processing::{SpanCompactionConfig, TelemetryData};
+
+// Constants for trace buffering timeouts
+const IDLE_TIMEOUT: Duration = Duration::from_millis(500); // Time to wait after root is seen
+const ABSOLUTE_TIMEOUT: Duration = Duration::from_secs(3);  // Max time to wait regardless of root
+
+// Structure to hold state for traces being buffered
+#[derive(Debug)]
+struct TraceBufferState {
+    buffered_payloads: Vec<TelemetryData>,
+    has_received_root: bool,
+    first_message_received_at: Instant,
+    last_message_received_at: Instant,
+}
 
 /// livetrace: Tail CloudWatch Logs for OTLP/stdout traces and forward them.
 #[tokio::main]
@@ -308,7 +325,8 @@ async fn main() -> Result<()> {
 
     // 10. Main Event Processing Loop
     tracing::debug!("Waiting for telemetry events...");
-    let mut telemetry_buffer: Vec<TelemetryData> = Vec::new();
+    // Use a HashMap to buffer telemetry data by trace_id
+    let mut trace_buffers: HashMap<String, TraceBufferState> = HashMap::new();
     let mut ticker = interval(Duration::from_secs(1));
     
     // Create a spinner for waiting period
@@ -328,16 +346,58 @@ async fn main() -> Result<()> {
             received = rx.recv() => {
                 match received {
                     Some(Ok(telemetry)) => {
-                        // Pause spinner when receiving data
-                        spinner.set_message("Processing telemetry data...");
-                        
-                        // Successfully received telemetry data
-                        if console_enabled || endpoint_opt.is_some() {
-                            telemetry_buffer.push(telemetry);
+                        // Decode the OTLP payload to extract the trace ID and check for root span
+                        match ExportTraceServiceRequest::decode(telemetry.payload.as_slice()) {
+                            Ok(request) => {
+                                // Pause spinner when receiving data
+                                spinner.set_message("Processing telemetry data...");
+                                
+                                let mut trace_id_hex_opt: Option<String> = None;
+                                let mut is_root_present_in_req = false;
+
+                                // Find trace_id and check for root span in this request
+                                for resource_span in &request.resource_spans {
+                                    for scope_span in &resource_span.scope_spans {
+                                        for span in &scope_span.spans {
+                                            if trace_id_hex_opt.is_none() {
+                                                trace_id_hex_opt = Some(hex::encode(&span.trace_id));
+                                            }
+                                            if span.parent_span_id.is_empty() {
+                                                is_root_present_in_req = true;
+                                                // Could potentially break early here if both found
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if let Some(tid) = trace_id_hex_opt {
+                                    let now = Instant::now();
+                                    let state = trace_buffers
+                                        .entry(tid)
+                                        .or_insert_with(|| TraceBufferState {
+                                            buffered_payloads: Vec::new(),
+                                            has_received_root: false,
+                                            first_message_received_at: now,
+                                            last_message_received_at: now,
+                                        });
+
+                                    // Update state
+                                    state.buffered_payloads.push(telemetry);
+                                    state.has_received_root |= is_root_present_in_req;
+                                    state.last_message_received_at = now;
+                                } else {
+                                    tracing::warn!("Received OTLP request with no spans, cannot determine trace ID.");
+                                }
+                                
+                                // Resume spinner
+                                spinner.set_message("Waiting for telemetry events...");
+                            }
+                            Err(e) => {
+                                // Decoding error - log and discard
+                                spinner.set_message(format!("Error: {}", e));
+                                tracing::warn!(error = %e, "Failed to decode OTLP protobuf payload, skipping item.");
+                            }
                         }
-                        
-                        // Resume spinner
-                        spinner.set_message("Waiting for telemetry events...");
                     }
                     Some(Err(e)) => {
                         // An error occurred in the source task (polling or live tail)
@@ -354,41 +414,85 @@ async fn main() -> Result<()> {
             }
             // Ticker Branch
             _ = ticker.tick() => {
-                if !telemetry_buffer.is_empty() {
-                    // Store the batch locally
-                    let batch_to_send = std::mem::take(&mut telemetry_buffer);
-                    
-                    // Temporarily suspend spinner during display 
-                    spinner.suspend(|| {
-                        tracing::debug!("Timer tick: Processing buffer with {} items.", batch_to_send.len());
-    
-                        if console_enabled {
-                            // Convert string theme to Theme enum
-                            let theme = Theme::from_str(&config.theme);
-                            if let Err(e) = display_console(
-                                &batch_to_send,
-                                &attr_globs,
-                                config.event_severity_attribute.as_str(),
-                                theme,
-                                config.color_by,
-                                config.events_only,
-                            ) {
-                                tracing::error!(error = %e, "Error displaying telemetry data");
+                let now = Instant::now();
+                let mut trace_ids_to_flush: Vec<String> = Vec::new();
+
+                // Identify traces ready for flushing based on timeouts
+                for (trace_id, state) in trace_buffers.iter() {
+                    let time_since_last = now.duration_since(state.last_message_received_at);
+                    let time_since_first = now.duration_since(state.first_message_received_at);
+
+                    let should_flush =
+                        (state.has_received_root && time_since_last > IDLE_TIMEOUT) // Root received + Idle
+                        || (time_since_first > ABSOLUTE_TIMEOUT);                   // Absolute timeout
+
+                    if should_flush {
+                        trace_ids_to_flush.push(trace_id.clone());
+                    }
+                }
+
+                if !trace_ids_to_flush.is_empty() {
+                    // Collect data needed for processing before removing from map
+                    let mut batches_to_process: Vec<(String, Vec<TelemetryData>, bool)> = Vec::new();
+                    for trace_id in &trace_ids_to_flush {
+                        if let Some(state) = trace_buffers.get(trace_id) {
+                            // Clone data needed for display/forwarding
+                            batches_to_process.push((
+                                trace_id.clone(),
+                                state.buffered_payloads.clone(),
+                                state.has_received_root,
+                            ));
+                        }
+                    }
+
+                    // Suspend spinner for synchronous display processing
+                    if console_enabled && !batches_to_process.is_empty() {
+                        spinner.suspend(|| {
+                            for (trace_id, batch, root_received) in &batches_to_process {
+                                tracing::debug!(%trace_id, count = batch.len(), "Displaying flushed trace buffer.");
+                                let theme = Theme::from_str(&config.theme);
+                                if let Err(e) = display_console(
+                                    batch,
+                                    &attr_globs,
+                                    config.event_severity_attribute.as_str(),
+                                    theme,
+                                    config.color_by,
+                                    config.events_only,
+                                    *root_received, // Pass the root_received flag
+                                ) {
+                                    tracing::error!(error = %e, %trace_id, "Error displaying telemetry data");
+                                }
                             }
-                        }
-                    });
-                    
-                    // Process any async work outside of suspend
+                        });
+                    }
+
+                    // Handle asynchronous forwarding outside suspend
                     if let Some(endpoint) = endpoint_opt {
-                        if let Err(e) = send_batch(
-                            &http_client,
-                            endpoint,
-                            batch_to_send,
-                            &compaction_config,
-                            otlp_header_map.clone(),
-                        ).await {
-                            tracing::error!(error = %e, "Error sending telemetry data");
+                        for (trace_id, batch, _root_received) in batches_to_process {
+                            tracing::debug!(%trace_id, count = batch.len(), "Forwarding flushed trace buffer.");
+                            // Clone necessary elements for the async task
+                            let client = http_client.clone();
+                            let endpoint_str = endpoint.to_string();
+                            let headers = otlp_header_map.clone();
+                            let cfg = compaction_config.clone();
+
+                            tokio::spawn(async move {
+                                if let Err(e) = send_batch(
+                                    &client,
+                                    &endpoint_str,
+                                    batch,
+                                    &cfg,
+                                    headers,
+                                ).await {
+                                    tracing::error!(error = %e, %trace_id, "Error sending telemetry data");
+                                }
+                            });
                         }
+                    }
+
+                    // Now remove the flushed traces from the main buffer
+                    for trace_id in trace_ids_to_flush {
+                        trace_buffers.remove(&trace_id);
                     }
                 }
             }
@@ -399,37 +503,68 @@ async fn main() -> Result<()> {
     spinner.finish_and_clear();
 
     // 11. Final Flush
-    if !telemetry_buffer.is_empty() {
+    if !trace_buffers.is_empty() {
         tracing::debug!(
-            "Flushing remaining {} items from buffer before exiting.",
-            telemetry_buffer.len()
+            "Flushing remaining {} traces from buffer before exiting.",
+            trace_buffers.len()
         );
-        let final_batch = std::mem::take(&mut telemetry_buffer);
+        
+        // Move all remaining states out of the map
+        let final_batches: Vec<(String, Vec<TelemetryData>, bool)> = trace_buffers
+            .into_iter()
+            .map(|(id, state)| (id, state.buffered_payloads, state.has_received_root))
+            .collect();
 
+        let mut forward_tasks = Vec::new(); // Collect futures for forwarding
+
+        // Process synchronously for console display first
         if console_enabled {
-            // Convert string theme to Theme enum
-            let theme = Theme::from_str(&config.theme);
-            if let Err(e) = display_console(
-                &final_batch,
-                &attr_globs,
-                &config.event_severity_attribute,
-                theme,
-                config.color_by,
-                config.events_only,
-            ) {
-                tracing::error!(error = %e, "Error displaying final telemetry data");
+            for (trace_id, final_batch, root_received) in &final_batches {
+                tracing::debug!(%trace_id, count = final_batch.len(), "Displaying final trace buffer.");
+                let theme = Theme::from_str(&config.theme);
+                if let Err(e) = display_console(
+                    final_batch,
+                    &attr_globs,
+                    &config.event_severity_attribute,
+                    theme,
+                    config.color_by,
+                    config.events_only,
+                    *root_received, // Pass the root_received flag
+                ) {
+                    tracing::error!(error = %e, %trace_id, "Error displaying final telemetry data");
+                }
             }
         }
 
+        // Queue forwarding tasks if needed
         if let Some(endpoint) = endpoint_opt {
-            if let Err(e) = send_batch(
-                &http_client,
-                endpoint,
-                final_batch,
-                &compaction_config,
-                otlp_header_map.clone(),
-            ).await {
-                tracing::error!(error = %e, "Error sending final telemetry data");
+            for (trace_id, final_batch, _root_received) in final_batches {
+                tracing::debug!(%trace_id, count = final_batch.len(), "Queueing final trace buffer for forwarding.");
+                // Clone necessary elements
+                let client = http_client.clone();
+                let endpoint_str = endpoint.to_string();
+                let headers = otlp_header_map.clone();
+                let cfg = compaction_config.clone();
+
+                // Add the future to a list to be awaited
+                forward_tasks.push(async move {
+                    if let Err(e) = send_batch(
+                        &client,
+                        &endpoint_str,
+                        final_batch,
+                        &cfg,
+                        headers,
+                    ).await {
+                        tracing::error!(error = %e, %trace_id, "Error sending final telemetry data");
+                    }
+                });
+            }
+            
+            // Await all forwarding tasks concurrently
+            if !forward_tasks.is_empty() {
+                tracing::info!("Waiting for final telemetry forwarding to complete...");
+                join_all(forward_tasks).await;
+                tracing::info!("Final telemetry forwarding complete.");
             }
         }
     }
