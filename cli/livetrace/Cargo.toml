@@ -47,8 +47,7 @@ anyhow = { workspace = true }
 
 # Console Coloring and Table
 colored = { workspace = true }
-prettytable-rs = { workspace = true }
-
+comfy-table = { workspace = true, features = ["tty", "custom_styling"] }
 # Timestamp Formatting
 chrono = { workspace = true, features = ["clock"] }
 

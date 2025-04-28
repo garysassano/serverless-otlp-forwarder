@@ -4,19 +4,15 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 
 /// Defines coloring strategies for the console output
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize, Default)]
 pub enum ColoringMode {
     /// Color by service name (default)
+    #[default]
     Service,
     /// Color by span ID
     Span,
 }
 
-impl Default for ColoringMode {
-    fn default() -> Self {
-        ColoringMode::Service
-    }
-}
 
 /// livetrace: Tail CloudWatch Logs for OTLP/stdout traces and forward them.
 #[derive(Parser, Debug, Clone)] // Added Clone
@@ -106,10 +102,10 @@ pub struct CliArgs {
     #[arg(
         long = "list-themes",
         help_heading = "Display Options",
-        conflicts_with = "theme",
+        conflicts_with = "theme"
     )]
     pub list_themes: bool,
-    
+
     /// Color output by service name or span ID
     #[arg(
         long = "color-by",
@@ -122,6 +118,10 @@ pub struct CliArgs {
     /// Only display events, hiding span start information in the timeline log view.
     #[arg(long, help_heading = "Display Options")]
     pub events_only: bool,
+
+    /// Maximum time in seconds to wait for spans belonging to a trace before displaying/forwarding it.
+    #[arg(long, default_value_t = 5, help_heading = "Processing Options")]
+    pub trace_timeout: u64,
 }
 
 // Create a custom value parser for themes
@@ -149,10 +149,10 @@ impl TypedValueParser for ThemeValueParser {
             "solarized - Solarized color scheme with muted tones",
             "monochrome - Grayscale palette for minimal distraction",
         ];
-        
+
         // Convert OsStr to a regular string for validation
         let theme_str = value.to_string_lossy().to_string();
-        
+
         // Handle empty theme value (when user just types --theme without a value)
         if theme_str.is_empty() {
             // Show the themes and exit
@@ -165,7 +165,7 @@ impl TypedValueParser for ThemeValueParser {
         if !Theme::is_valid_theme(&theme_str) {
             // Create a helpful error message with valid themes
             let themes_list = valid_themes.join("\n  * ");
-            
+
             let err = format!(
                 "Invalid theme '{}'. Available themes:\n  * {}",
                 theme_str, themes_list

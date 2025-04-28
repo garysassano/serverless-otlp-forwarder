@@ -68,7 +68,8 @@ pub async fn setup_aws_resources(
     tracing::debug!(region = %region_str, account_id = %account_id, partition = %partition, "Determined region, account ID, and partition");
 
     // --- 5. Discover Log Groups based on pattern or stack name ---
-    let resolved_log_group_names = discover_log_group_names(&cfn_client, &cwl_client, log_group_pattern, stack_name).await?;
+    let resolved_log_group_names =
+        discover_log_group_names(&cfn_client, &cwl_client, log_group_pattern, stack_name).await?;
 
     // --- Add validation step ---
     tracing::debug!("Validating discovered log group names...");
@@ -97,7 +98,12 @@ pub async fn setup_aws_resources(
         } else {
             (
                 "Log Groups Patterns",
-                format!("{:?}", log_group_pattern.as_ref().map_or(vec!["N/A".to_string()], |v| v.to_vec())),
+                format!(
+                    "{:?}",
+                    log_group_pattern
+                        .as_ref()
+                        .map_or(vec!["N/A".to_string()], |v| v.to_vec())
+                ),
             )
         };
         let error_msg = format!(
@@ -145,7 +151,7 @@ async fn discover_log_group_names(
 ) -> Result<Vec<String>> {
     // Create a HashSet to collect all log groups and avoid duplicates
     let mut all_log_groups = std::collections::HashSet::new();
-    
+
     // Process stack name if provided
     if let Some(stack) = stack_name.as_deref() {
         let stack_groups = discover_log_groups_from_stack(cfn_client, stack).await?;
@@ -153,7 +159,7 @@ async fn discover_log_group_names(
             all_log_groups.insert(group);
         }
     }
-    
+
     // Process log group patterns if provided
     if let Some(patterns) = log_group_pattern {
         if !patterns.is_empty() {
@@ -163,7 +169,7 @@ async fn discover_log_group_names(
             }
         }
     }
-    
+
     // Return error if neither was provided or both were empty
     if all_log_groups.is_empty() {
         if stack_name.is_none() && log_group_pattern.is_none() {
@@ -176,7 +182,7 @@ async fn discover_log_group_names(
             ));
         }
     }
-    
+
     // Convert to Vec and return
     Ok(all_log_groups.into_iter().collect())
 }
@@ -187,10 +193,10 @@ async fn discover_log_groups_by_patterns(
     patterns: &[String],
 ) -> Result<Vec<String>> {
     tracing::debug!("Discovering log groups matching patterns: {:?}", patterns);
-    
+
     // Use a HashSet to avoid duplicates when multiple patterns match the same log group
     let mut discovered_groups = std::collections::HashSet::new();
-    
+
     // Process each pattern in sequence
     for pattern in patterns {
         // Call the existing function that handles a single pattern
@@ -200,7 +206,7 @@ async fn discover_log_groups_by_patterns(
             discovered_groups.insert(group);
         }
     }
-    
+
     // Convert back to Vec for the return value
     Ok(discovered_groups.into_iter().collect())
 }

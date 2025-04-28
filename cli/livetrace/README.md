@@ -142,6 +142,7 @@ Control the appearance of the console output:
 *   `--attrs <GLOB_LIST>`: Comma-separated list of glob patterns (e.g., `"http.*,db.statement,my.custom.*"`) to filter which attributes are displayed. Applied to both span attributes and event attributes. If omitted, all attributes are shown.
 *   `--event-severity-attribute <ATTRIBUTE_NAME>`: (Default: `event.severity`) Specify the event attribute key used to determine the severity level for coloring event output.
 *   `--events-only`: Only display events in the timeline log, hiding span start information.
+*   `--trace-timeout <SECONDS>`: (Default: 5) Maximum time in seconds to wait for spans belonging to a trace before displaying/forwarding it, even if the root span hasn't been received.
 
 ### Other Options
 
@@ -227,6 +228,7 @@ timeline-width = 120
 attrs = "http.*"
 theme = "solarized"
 events-only = true
+trace-timeout = 10
 
 [profiles.prod-profile]
 stack-name = "production-stack"

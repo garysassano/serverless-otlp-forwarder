@@ -31,7 +31,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use crate::aws_setup::setup_aws_resources;
 use crate::cli::{parse_attr_globs, CliArgs, ColoringMode};
 use crate::config::{load_and_resolve_config, save_profile_config, EffectiveConfig, ProfileConfig};
-use crate::console_display::{display_console, Theme, get_terminal_width};
+use crate::console_display::{display_console, get_terminal_width, Theme};
 use crate::forwarder::{parse_otlp_headers_from_vec, send_batch};
 use crate::live_tail_adapter::start_live_tail_task;
 use crate::poller::start_polling_task;
@@ -39,7 +39,6 @@ use crate::processing::{SpanCompactionConfig, TelemetryData};
 
 // Constants for trace buffering timeouts
 const IDLE_TIMEOUT: Duration = Duration::from_millis(500); // Time to wait after root is seen
-const ABSOLUTE_TIMEOUT: Duration = Duration::from_secs(3);  // Max time to wait regardless of root
 
 // Structure to hold state for traces being buffered
 #[derive(Debug)]
@@ -103,6 +102,7 @@ async fn main() -> Result<()> {
             theme: args.theme.clone(),
             color_by: args.color_by,
             events_only: args.events_only,
+            trace_timeout: args.trace_timeout,
         }
     };
 
@@ -177,8 +177,9 @@ async fn main() -> Result<()> {
         &config.log_group_pattern,
         &config.stack_name,
         &config.aws_region,
-        &config.aws_profile
-    ).await?;
+        &config.aws_profile,
+    )
+    .await?;
     let cwl_client = aws_result.cwl_client;
     let account_id = aws_result.account_id;
     let region_str = aws_result.region_str;
@@ -208,14 +209,14 @@ async fn main() -> Result<()> {
         config_heading.bold(),
         "─".repeat(config_padding).dimmed()
     );
-    
+
     // Basic AWS Information
     println!("  {:<18}: {}", "AWS Account ID".dimmed(), account_id);
     println!("  {:<18}: {}", "AWS Region".dimmed(), region_str);
     if let Some(profile) = &config.aws_profile {
         println!("  {:<18}: {}", "AWS Profile".dimmed(), profile);
     }
-    
+
     // Log Group Sources
     if let Some(patterns) = &config.log_group_pattern {
         println!("  {:<18}: {:?}", "Pattern".dimmed(), patterns);
@@ -223,49 +224,78 @@ async fn main() -> Result<()> {
     if let Some(stack) = &config.stack_name {
         println!("  {:<18}: {}", "CloudFormation".dimmed(), stack);
     }
-    
+
     // Modes & Settings
     println!();
-    
+
     // Operation Mode
     if let Some(poll_secs) = config.poll_interval {
         println!("  {:<18}: Polling", "Mode".dimmed());
         println!("  {:<18}: {} seconds", "Poll Interval".dimmed(), poll_secs);
     } else {
         println!("  {:<18}: Live Tail", "Mode".dimmed());
-        println!("  {:<18}: {} minutes", "Session Timeout".dimmed(), config.session_timeout);
+        println!(
+            "  {:<18}: {} minutes",
+            "Session Timeout".dimmed(),
+            config.session_timeout
+        );
     }
-    
+
     // Forwarding Configuration
-    println!("  {:<18}: {}", "Forward Only".dimmed(), if config.forward_only { "Yes" } else { "No" });
+    println!(
+        "  {:<18}: {}",
+        "Forward Only".dimmed(),
+        if config.forward_only { "Yes" } else { "No" }
+    );
     if let Some(endpoint) = &resolved_endpoint {
         println!("  {:<18}: {}", "OTLP Endpoint".dimmed(), endpoint);
     } else {
         println!("  {:<18}: Not configured", "OTLP Endpoint".dimmed());
     }
     if !resolved_headers_vec.is_empty() {
-        println!("  {:<18}: {} headers", "OTLP Headers".dimmed(), resolved_headers_vec.len());
+        println!(
+            "  {:<18}: {} headers",
+            "OTLP Headers".dimmed(),
+            resolved_headers_vec.len()
+        );
     }
-    
+
     // Display Settings
     println!("  {:<18}: {}", "Theme".dimmed(), config.theme);
-    println!("  {:<18}: {}", "Color By".dimmed(), match config.color_by {
-        ColoringMode::Service => "Service",
-        ColoringMode::Span => "Span ID",
-    });
+    println!(
+        "  {:<18}: {}",
+        "Color By".dimmed(),
+        match config.color_by {
+            ColoringMode::Service => "Service",
+            ColoringMode::Span => "Span ID",
+        }
+    );
     if let Some(attrs) = &config.attrs {
         println!("  {:<18}: {}", "Attributes".dimmed(), attrs);
     } else {
         println!("  {:<18}: All", "Attributes".dimmed());
     }
-    println!("  {:<18}: {}", "Severity Attr".dimmed(), config.event_severity_attribute);
-    println!("  {:<18}: {}", "Events Only".dimmed(), if config.events_only { "Yes" } else { "No" });
-    
+    println!(
+        "  {:<18}: {}",
+        "Severity Attr".dimmed(),
+        config.event_severity_attribute
+    );
+    println!(
+        "  {:<18}: {}",
+        "Events Only".dimmed(),
+        if config.events_only { "Yes" } else { "No" }
+    );
+    println!(
+        "  {:<18}: {} seconds",
+        "Trace Timeout".dimmed(),
+        config.trace_timeout
+    );
+
     // Config Source
     if let Some(profile) = &args.config_profile {
         println!("  {:<18}: {}", "Config Profile".dimmed(), profile);
     }
-    
+
     // Verbosity Level
     let verbosity_str = match config.verbose {
         0 => "Normal",
@@ -276,26 +306,28 @@ async fn main() -> Result<()> {
         }
     };
     println!("  {:<18}: {}", "Verbosity".dimmed(), verbosity_str);
-    
+
     // Display Resolved Log Groups - moved to the end
     println!();
     let validated_log_group_names_for_display: Vec<String> = resolved_log_group_arns
         .iter()
-        .map(|arn| arn.split(':').next_back().unwrap_or("unknown-name").to_string())
+        .map(|arn| {
+            arn.split(':')
+                .next_back()
+                .unwrap_or("unknown-name")
+                .to_string()
+        })
         .collect();
-    print!(
-        "  {:<18}: ",
-        "Log Groups".dimmed()
-    );
+    print!("  {:<18}: ", "Log Groups".dimmed());
     if let Some((first, rest)) = validated_log_group_names_for_display.split_first() {
-        println!("{}", first.bright_black());
+        println!("{}", first);
         for name in rest {
-            println!("{:<22}{}", "", name.bright_black());
+            println!("{:<22}{}", "", name);
         }
     } else {
         println!("None");
     }
-    
+
     println!("\n");
     // End Preamble
 
@@ -328,14 +360,14 @@ async fn main() -> Result<()> {
     // Use a HashMap to buffer telemetry data by trace_id
     let mut trace_buffers: HashMap<String, TraceBufferState> = HashMap::new();
     let mut ticker = interval(Duration::from_secs(1));
-    
+
     // Create a spinner for waiting period
     let spinner = ProgressBar::new_spinner();
     spinner.set_style(
         ProgressStyle::default_spinner()
             .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
             .template("{spinner} {msg}")
-            .unwrap()
+            .unwrap(),
     );
     spinner.set_message("Waiting for telemetry events...");
     spinner.enable_steady_tick(Duration::from_millis(100));
@@ -351,7 +383,7 @@ async fn main() -> Result<()> {
                             Ok(request) => {
                                 // Pause spinner when receiving data
                                 spinner.set_message("Processing telemetry data...");
-                                
+
                                 let mut trace_id_hex_opt: Option<String> = None;
                                 let mut is_root_present_in_req = false;
 
@@ -388,7 +420,7 @@ async fn main() -> Result<()> {
                                 } else {
                                     tracing::warn!("Received OTLP request with no spans, cannot determine trace ID.");
                                 }
-                                
+
                                 // Resume spinner
                                 spinner.set_message("Waiting for telemetry events...");
                             }
@@ -424,7 +456,7 @@ async fn main() -> Result<()> {
 
                     let should_flush =
                         (state.has_received_root && time_since_last > IDLE_TIMEOUT) // Root received + Idle
-                        || (time_since_first > ABSOLUTE_TIMEOUT);                   // Absolute timeout
+                        || (time_since_first > Duration::from_secs(config.trace_timeout)); // Use config value
 
                     if should_flush {
                         trace_ids_to_flush.push(trace_id.clone());
@@ -508,7 +540,7 @@ async fn main() -> Result<()> {
             "Flushing remaining {} traces from buffer before exiting.",
             trace_buffers.len()
         );
-        
+
         // Move all remaining states out of the map
         let final_batches: Vec<(String, Vec<TelemetryData>, bool)> = trace_buffers
             .into_iter()
@@ -559,7 +591,7 @@ async fn main() -> Result<()> {
                     }
                 });
             }
-            
+
             // Await all forwarding tasks concurrently
             if !forward_tasks.is_empty() {
                 tracing::info!("Waiting for final telemetry forwarding to complete...");

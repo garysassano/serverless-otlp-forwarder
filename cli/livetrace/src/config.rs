@@ -63,9 +63,11 @@ pub struct ProfileConfig {
     #[serde(rename = "session-timeout")]
     pub session_timeout: Option<u64>,
     // Note: Verbosity (`verbose`) is generally not configured via file.
-    
     #[serde(rename = "events-only", skip_serializing_if = "Option::is_none")]
     pub events_only: Option<bool>,
+
+    #[serde(rename = "trace-timeout", skip_serializing_if = "Option::is_none")]
+    pub trace_timeout: Option<u64>,
 }
 
 /// Represents the final, merged configuration after applying precedence rules.
@@ -89,6 +91,7 @@ pub struct EffectiveConfig {
     pub event_severity_attribute: String,
     pub color_by: ColoringMode,
     pub events_only: bool,
+    pub trace_timeout: u64,
 
     // --- Mode ---
     pub poll_interval: Option<u64>,
@@ -106,10 +109,7 @@ impl ProfileConfig {
     /// Creates a ProfileConfig from CliArgs, only including non-default values.
     pub fn from_cli_args(args: &CliArgs) -> Self {
         ProfileConfig {
-            log_group_pattern: args
-                .log_group_pattern
-                .clone()
-                .filter(|v| !v.is_empty()),
+            log_group_pattern: args.log_group_pattern.clone().filter(|v| !v.is_empty()),
             stack_name: args.stack_name.clone(),
             otlp_endpoint: args.otlp_endpoint.clone(),
             otlp_headers: if args.otlp_headers.is_empty() {
@@ -130,6 +130,7 @@ impl ProfileConfig {
             theme: Some(args.theme.clone()).filter(|s| s != "default"), // Default is "default"
             color_by: Some(args.color_by).filter(|&c| c != ColoringMode::Service), // Default is Service
             events_only: Some(args.events_only).filter(|&e| e), // Default is false
+            trace_timeout: Some(args.trace_timeout).filter(|&t| t != 5), // Default is 5
         }
     }
 }
@@ -157,6 +158,7 @@ pub fn load_and_resolve_config(
         theme: "default".to_string(),
         color_by: ColoringMode::Service,
         events_only: false,
+        trace_timeout: 5,
     };
 
     // If no profile specified, just return CLI args as effective config
@@ -246,17 +248,46 @@ fn apply_cli_args_to_effective(cli_args: &CliArgs, effective: &mut EffectiveConf
         effective.poll_interval = cli_args.poll_interval;
     }
 
-    // For non-Option types with default values, we'll always apply them
-    // This assumes if they're passed on the CLI, they're explicitly set
+    // For non-Option types, check if they differ from their default values
+    // Only apply them if they're different (indicating they were explicitly set)
 
-    // Always apply these values from CLI args, as we can't detect if they were explicitly set
-    effective.forward_only = cli_args.forward_only;
-    effective.event_severity_attribute = cli_args.event_severity_attribute.clone();
-    effective.session_timeout = cli_args.session_timeout;
+    // Default: false
+    if cli_args.forward_only {
+        effective.forward_only = true;
+    }
+
+    // Default: "event.severity"
+    if cli_args.event_severity_attribute != "event.severity" {
+        effective.event_severity_attribute = cli_args.event_severity_attribute.clone();
+    }
+
+    // Default: 30 (Only applicable if poll_interval is None)
+    if cli_args.poll_interval.is_none() && cli_args.session_timeout != 30 {
+        effective.session_timeout = cli_args.session_timeout;
+    }
+
+    // Default: ColoringMode::Service
+    if cli_args.color_by != ColoringMode::default() {
+        effective.color_by = cli_args.color_by;
+    }
+
+    // Default: false
+    if cli_args.events_only {
+        effective.events_only = true;
+    }
+
+    // Default: 5
+    if cli_args.trace_timeout != 5 {
+        effective.trace_timeout = cli_args.trace_timeout;
+    }
+
+    // Default: "default"
+    if cli_args.theme != "default" {
+        effective.theme = cli_args.theme.clone();
+    }
+
+    // Always apply verbosity from CLI - highest precedence makes sense here
     effective.verbose = cli_args.verbose;
-    effective.theme = cli_args.theme.clone();
-    effective.color_by = cli_args.color_by;
-    effective.events_only = cli_args.events_only;
 }
 
 // Remove the old placeholder:
@@ -388,9 +419,13 @@ fn apply_profile_to_effective(profile: &ProfileConfig, effective: &mut Effective
     if let Some(val) = &profile.color_by {
         effective.color_by = *val;
     }
-    
+
     if let Some(val) = profile.events_only {
         effective.events_only = val;
+    }
+
+    if let Some(val) = profile.trace_timeout {
+        effective.trace_timeout = val;
     }
 }
 
@@ -404,7 +439,10 @@ mod tests {
     // Helper to create a mock CliArgs for testing
     fn mock_cli_args() -> CliArgs {
         CliArgs {
-            log_group_pattern: Some(vec!["test-pattern-1".to_string(), "test-pattern-2".to_string()]),
+            log_group_pattern: Some(vec![
+                "test-pattern-1".to_string(),
+                "test-pattern-2".to_string(),
+            ]),
             stack_name: None,
             otlp_endpoint: Some("http://localhost:4318".to_string()),
             otlp_headers: vec!["Auth=Bearer xyz".to_string()],
@@ -422,6 +460,7 @@ mod tests {
             list_themes: false,
             color_by: ColoringMode::Service,
             events_only: true,
+            trace_timeout: 10,
         }
     }
 
@@ -456,7 +495,10 @@ aws-region = "us-west-1"
         // Verify fields are converted correctly
         assert_eq!(
             profile.log_group_pattern,
-            Some(vec!["test-pattern-1".to_string(), "test-pattern-2".to_string()])
+            Some(vec![
+                "test-pattern-1".to_string(),
+                "test-pattern-2".to_string()
+            ])
         );
         assert_eq!(profile.stack_name, None);
         assert_eq!(
@@ -479,6 +521,7 @@ aws-region = "us-west-1"
         );
         assert_eq!(profile.theme, Some("test-theme".to_string()));
         assert_eq!(profile.events_only, Some(true));
+        assert_eq!(profile.trace_timeout, Some(10));
     }
 
     #[test]
@@ -508,7 +551,10 @@ aws-region = "us-west-1"
         let saved_profile = &read_config.profiles["test-profile"];
         assert_eq!(
             saved_profile.log_group_pattern,
-            Some(vec!["test-pattern-1".to_string(), "test-pattern-2".to_string()])
+            Some(vec![
+                "test-pattern-1".to_string(),
+                "test-pattern-2".to_string()
+            ])
         );
         assert_eq!(
             saved_profile.otlp_endpoint,
@@ -535,11 +581,15 @@ aws-region = "us-west-1"
             theme: "default".to_string(),
             color_by: ColoringMode::Service,
             events_only: false,
+            trace_timeout: 5,
         };
 
         // Create a profile with some settings
         let profile = ProfileConfig {
-            log_group_pattern: Some(vec!["profile-pattern-1".to_string(), "profile-pattern-2".to_string()]),
+            log_group_pattern: Some(vec![
+                "profile-pattern-1".to_string(),
+                "profile-pattern-2".to_string(),
+            ]),
             stack_name: None,
             otlp_endpoint: Some("http://profile-endpoint:4318".to_string()),
             otlp_headers: Some(vec!["Profile-Auth=token123".to_string()]),
@@ -554,6 +604,7 @@ aws-region = "us-west-1"
             theme: Some("test-theme".to_string()),
             color_by: None,
             events_only: Some(true),
+            trace_timeout: Some(10),
         };
 
         // Apply the profile
@@ -562,7 +613,10 @@ aws-region = "us-west-1"
         // Verify overrides happened correctly
         assert_eq!(
             effective.log_group_pattern,
-            Some(vec!["profile-pattern-1".to_string(), "profile-pattern-2".to_string()])
+            Some(vec![
+                "profile-pattern-1".to_string(),
+                "profile-pattern-2".to_string()
+            ])
         );
         assert_eq!(effective.stack_name, Some("original-stack".to_string()));
         assert_eq!(
@@ -582,6 +636,7 @@ aws-region = "us-west-1"
         assert_eq!(effective.session_timeout, 30);
         assert_eq!(effective.theme, "test-theme".to_string());
         assert!(effective.events_only);
+        assert_eq!(effective.trace_timeout, 10);
     }
 
     #[test]
@@ -618,6 +673,7 @@ aws-region = "us-west-1"
             theme: args.theme.clone(),
             color_by: args.color_by,
             events_only: args.events_only,
+            trace_timeout: args.trace_timeout,
         };
 
         // Apply global settings
@@ -634,7 +690,10 @@ aws-region = "us-west-1"
         // Pattern from 'dev' profile should override CLI args
         assert_eq!(
             effective.log_group_pattern,
-            Some(vec!["/aws/lambda/dev-func".to_string(), "specific-dev-group".to_string()])
+            Some(vec![
+                "/aws/lambda/dev-func".to_string(),
+                "specific-dev-group".to_string()
+            ])
         );
 
         // otlp_endpoint from 'dev' profile should override CLI args

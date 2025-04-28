@@ -1,26 +1,26 @@
+use crate::cli::ColoringMode;
+use crate::processing::TelemetryData;
 use anyhow::Result;
 use chrono::{TimeZone, Utc};
 use colored::*;
+use comfy_table::{presets, TableComponent, Attribute, Cell, CellAlignment, ContentArrangement, Table};
 use globset::GlobSet;
 use opentelemetry_proto::tonic::{
     collector::trace::v1::ExportTraceServiceRequest,
-    common::v1::{AnyValue, KeyValue},
+    common::v1::{any_value::Value as ProtoValue, AnyValue, KeyValue},
     trace::v1::{status, Span},
 };
-use prettytable::{format, row, Table};
 use prost::Message;
 use std::collections::HashMap;
-use terminal_size::{self, Width, Height};
-use crate::cli::ColoringMode;
-use crate::processing::TelemetryData; // Need TelemetryData for display_console
+use terminal_size::{self, Height, Width}; // Need TelemetryData for display_console
 
 // Constants
 const SERVICE_NAME_WIDTH: usize = 25;
 const SPAN_NAME_WIDTH: usize = 40;
-const SPAN_ID_WIDTH: usize = 32;
-const SPAN_KIND_WIDTH: usize = 10;    // Width for the Span Kind column
-const STATUS_WIDTH: usize = 8;        // Width for the Status column
-const DURATION_WIDTH: usize = 10;     // Width for the Duration column
+const SPAN_ID_WIDTH: usize = 10;
+const SPAN_KIND_WIDTH: usize = 10; // Width for the Span Kind column
+const STATUS_WIDTH: usize = 8; // Width for the Status column
+const DURATION_WIDTH: usize = 13; // Width for the Duration column
 
 // Define a bright red color for errors
 const ERROR_COLOR: (u8, u8, u8) = (255, 0, 0); // Bright red
@@ -195,7 +195,6 @@ struct ConsoleSpan {
     service_name: String,
 }
 
-
 // Structs for the timeline view
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ItemType {
@@ -209,9 +208,9 @@ struct TimelineItem {
     item_type: ItemType,
     service_name: String,
     span_id: String,
-    name: String,          // Span Name or Event Name
-    level_or_status: String, // Formatted Level (e.g., INFO) or Status (e.g., OK)
-    is_error: bool, // To help color span ID for SpanStart items
+    name: String,              // Span Name or Event Name
+    level_or_status: String,   // Formatted Level (e.g., INFO) or Status (e.g., OK)
+    is_error: bool,            // To help color span ID for SpanStart items
     attributes: Vec<KeyValue>, // Filtered attributes for the specific item
     // Optional: Store parent span attributes separately *only* for events
     parent_span_attributes: Option<Vec<KeyValue>>,
@@ -224,6 +223,77 @@ pub fn get_terminal_width(default_width: usize) -> usize {
     } else {
         default_width // Fallback if terminal size can't be determined
     }
+}
+
+fn format_duration_for_scale(duration_ns: u64) -> String {
+    if duration_ns == 0 {
+        return "▾0ms".to_string();
+    }
+
+    let ms = duration_ns as f64 / 1_000_000.0;
+    if ms < 1.0 {
+        // Show microseconds for very small durations
+        let us = duration_ns as f64 / 1_000.0;
+        format!("▾{:.0}μs", us)
+    } else if ms < 1000.0 {
+        // Show milliseconds for normal durations
+        format!("▾{:.0}ms", ms)
+    } else {
+        // Show seconds for large durations
+        format!("▾{:.1}s", ms / 1000.0)
+    }
+}
+
+fn generate_timeline_scale(trace_duration_ns: u64, timeline_width: usize) -> String {
+    // Return empty if no duration or width is too small
+    if trace_duration_ns == 0 || timeline_width < 10 {
+        return " ".repeat(timeline_width);
+    }
+
+    const NUM_MARKERS: usize = 5;
+
+    // Create our buffer filled with spaces
+    let mut buffer = vec![' '; timeline_width];
+
+    // Create the markers: 0%, 25%, 50%, 75%, 100% of duration
+    for i in 0..NUM_MARKERS {
+        // Calculate the time at this marker position
+        let percentage = i as f64 / (NUM_MARKERS - 1) as f64;
+        let marker_time_ns = (trace_duration_ns as f64 * percentage).round() as u64;
+
+        // Format the time label
+        let label = format_duration_for_scale(marker_time_ns);
+
+        // Calculate exact position in the timeline for this percentage
+        let position = (percentage * (timeline_width - 1) as f64).round() as usize;
+
+        // Place the label with specific alignment:
+        // - First label (0ms): Left-aligned at position 0
+        // - Last label: Right-aligned at the end
+        // - Middle labels: Centered around their position
+        let label_len = label.chars().count();
+        let label_start = if i == 0 {
+            // First label starts at position 0
+            0
+        } else if i == NUM_MARKERS - 1 {
+            // Last label ends at the last position
+            timeline_width.saturating_sub(label_len)
+        } else {
+            // Middle labels centered (but shifted left if needed)
+            position
+                .saturating_sub(label_len / 2)
+                .min(timeline_width.saturating_sub(label_len))
+        };
+
+        // Write the label to the buffer
+        for (j, ch) in label.chars().enumerate() {
+            let idx = label_start + j;
+            if idx < timeline_width {
+                buffer[idx] = ch;
+            }
+        }
+    }
+    buffer.into_iter().collect()
 }
 
 // Public Display Function
@@ -283,27 +353,50 @@ pub fn display_console(
     const SPACING: usize = 6; // Approx spaces between 7 columns
 
     // Calculate the fixed width excluding the timeline
-    let fixed_width_excluding_timeline = SERVICE_NAME_WIDTH + SPAN_NAME_WIDTH + SPAN_KIND_WIDTH + DURATION_WIDTH + SPAN_ID_WIDTH + STATUS_WIDTH + SPACING;
-    
+    let fixed_width_excluding_timeline = SERVICE_NAME_WIDTH
+        + SPAN_NAME_WIDTH
+        + SPAN_KIND_WIDTH
+        + DURATION_WIDTH
+        + SPAN_ID_WIDTH
+        + STATUS_WIDTH
+        + SPACING;
+
     // Get terminal width and calculate dynamic timeline width
     let terminal_width = get_terminal_width(120); // Use a larger default fallback
-    // Ensure timeline width is at least some minimum (e.g., 10) or doesn't cause overflow
-    let calculated_timeline_width = terminal_width.saturating_sub(fixed_width_excluding_timeline).max(10);
+                                                  // Ensure timeline width is at least some minimum (e.g., 10) or doesn't cause overflow
+    let calculated_timeline_width = terminal_width
+        .saturating_sub(fixed_width_excluding_timeline)
+        .max(10);
 
     // Total width is now just the terminal width for header padding
     let total_table_width = terminal_width;
 
     for (trace_id, spans_in_trace_with_service) in traces {
-        // Print Trace ID Header
-        let trace_heading = format!("Trace ID: {}", trace_id);
-        // Calculate padding based on total table width
-        let trace_padding = total_table_width.saturating_sub(trace_heading.len() + 3); // 3 for " ─ " and spaces
+        // 1. Define base and suffix
+        let base_heading = format!("Trace ID: {}", trace_id);
+        let suffix = if root_span_received { "" } else { " (Missing Root)" };
+
+        // 2. Calculate total visible length
+        let visible_heading_len = base_heading.len() + suffix.len();
+
+        // 3. Apply styling
+        let styled_heading = format!("{}{}", base_heading.bold(), suffix.dimmed());
+
+        // 4. Calculate padding dashes needed
+        // Subtract heading length and 2 spaces (one before, one after heading)
+        let total_dash_len = total_table_width.saturating_sub(visible_heading_len + 2);
+        // Ensure at least one dash on each side if possible
+        let left_dashes = 1;
+        let right_dashes = total_dash_len.saturating_sub(left_dashes);
+
+        // 5. Print the header
         println!(
-            "\n{} {} {}",
-            "─".dimmed(),
-            trace_heading.bold(),
-            "─".repeat(trace_padding).dimmed()
+            "\n{} {} {}\n\n",
+            "─".repeat(left_dashes).dimmed(),
+            styled_heading, // Already styled
+            "─".repeat(right_dashes).dimmed()
         );
+
 
         if spans_in_trace_with_service.is_empty() {
             continue;
@@ -319,9 +412,15 @@ pub fn display_console(
             });
             let is_error = status_code == status::StatusCode::Error;
 
-            if !events_only { // Only add span starts if not events_only mode
+            if !events_only {
+                // Only add span starts if not events_only mode
                 let filtered_span_attrs: Vec<KeyValue> = match attr_globs {
-                    Some(globs) => span.attributes.iter().filter(|kv| globs.is_match(&kv.key)).cloned().collect(),
+                    Some(globs) => span
+                        .attributes
+                        .iter()
+                        .filter(|kv| globs.is_match(&kv.key))
+                        .cloned()
+                        .collect(),
                     None => span.attributes.clone(), // Collect all if no globs
                 };
 
@@ -359,11 +458,21 @@ pub fn display_console(
 
                 // Filter attributes based on globs
                 let filtered_event_attrs: Vec<KeyValue> = match attr_globs {
-                    Some(globs) => event.attributes.iter().filter(|kv| globs.is_match(&kv.key)).cloned().collect(),
+                    Some(globs) => event
+                        .attributes
+                        .iter()
+                        .filter(|kv| globs.is_match(&kv.key))
+                        .cloned()
+                        .collect(),
                     None => event.attributes.clone(),
                 };
                 let filtered_parent_span_attrs: Vec<KeyValue> = match attr_globs {
-                    Some(globs) => span.attributes.iter().filter(|kv| globs.is_match(&kv.key)).cloned().collect(),
+                    Some(globs) => span
+                        .attributes
+                        .iter()
+                        .filter(|kv| globs.is_match(&kv.key))
+                        .cloned()
+                        .collect(),
                     None => span.attributes.clone(),
                 };
 
@@ -436,25 +545,44 @@ pub fn display_console(
         let trace_duration_ns = max_end_time.saturating_sub(min_start_time);
 
         let mut table = Table::new();
-        // Use a custom format based on CLEAN
-        let table_format = format::FormatBuilder::new()
-            .column_separator(' ')
-            .borders(' ')
-            .separators(&[], format::LineSeparator::new(' ', ' ', ' ', ' '))
-            .padding(1, 1)
-            .build();
-        table.set_format(table_format);
+        // Apply comfy-table preset and dynamic arrangement
+        table
+            .load_preset(presets::NOTHING)
+            .set_content_arrangement(ContentArrangement::DynamicFullWidth)
+            .set_width(total_table_width as u16)
+            .set_style(TableComponent::MiddleHeaderIntersections, '┴')
+            .set_style(TableComponent::BottomBorder, '─')
+            .set_style(TableComponent::BottomBorderIntersections, '─')
+            .set_style(TableComponent::HeaderLines, '─');
 
-        // Add table headers
-        table.set_titles(row![ bl =>
-            "Service",
-            "Span Name",
-            "Kind",
-            "Duration (ms)",
-            "Span ID",
-            "Status",
-            "Timeline"
+        // Add table headers using comfy-table API with bold attribute
+        table.set_header(vec![
+            Cell::new("Service").add_attribute(Attribute::Bold),
+            Cell::new("Span Name").add_attribute(Attribute::Bold),
+            Cell::new("Kind").add_attribute(Attribute::Bold),
+            Cell::new("Duration (ms)").add_attribute(Attribute::Bold),
+            Cell::new("Span ID").add_attribute(Attribute::Bold),
+            Cell::new("Status").add_attribute(Attribute::Bold),
+            Cell::new("Timeline").add_attribute(Attribute::Bold),
         ]);
+        // --- Add the timeline scale row ---
+        if trace_duration_ns > 0 {
+            let scale_content =
+                generate_timeline_scale(trace_duration_ns, calculated_timeline_width);
+            if !scale_content.trim().is_empty() {
+                // Add the scale row using comfy_table Cells
+                table.add_row(vec![
+                    Cell::new(""),            // Service
+                    Cell::new(""),            // Span Name
+                    Cell::new(""),            // Kind
+                    Cell::new(""),            // Duration (ms)
+                    Cell::new(""),            // Span ID
+                    Cell::new(""),            // Status
+                    Cell::new(scale_content), // Timeline scale content
+                ]);
+            }
+        }
+        // --- End timeline scale row ---
 
         for root in roots {
             add_span_to_table(
@@ -469,23 +597,24 @@ pub fn display_console(
                 color_by,
             )?;
         }
-        table.printstd();
 
-        // Replace the existing events display with timeline display
+
+        println!("{}", table);
+
         if !timeline_items.is_empty() {
             // Print Header
-            let header_text = if events_only {
-                format!("Events for Trace: {}", trace_id)
-            } else {
-                format!("Timeline Log for Trace: {}", trace_id)
-            };
-            let events_padding = total_table_width.saturating_sub(header_text.len() + 3);
-            println!(
-                "\n{} {} {}",
-                "─".dimmed(),
-                header_text.bold(),
-                "─".repeat(events_padding).dimmed()
-            );
+            // let header_text = if events_only {
+            //     format!("Events for Trace: {}", trace_id)
+            // } else {
+            //     format!("Timeline Log for Trace: {}", trace_id)
+            // };
+            // let events_padding = total_table_width.saturating_sub(header_text.len() + 3);
+            // println!(
+            //     "\n{} {} {}",
+            //     "─".dimmed(),
+            //     header_text.bold(),
+            //     "─".repeat(events_padding)
+            // );
 
             // Print each item
             for item in timeline_items {
@@ -497,16 +626,18 @@ pub fn display_console(
                     ColoringMode::Service => theme.get_color_for_service(&item.service_name),
                     ColoringMode::Span => theme.get_color_for_span(&item.span_id),
                 };
-                
+
                 let span_id_prefix = item.span_id.chars().take(8).collect::<String>();
-                
+
                 // Color span ID
                 let colored_span_id_prefix = if item.is_error {
                     span_id_prefix
                         .truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2)
                         .to_string()
                 } else {
-                    span_id_prefix.truecolor(prefix_r, prefix_g, prefix_b).to_string()
+                    span_id_prefix
+                        .truecolor(prefix_r, prefix_g, prefix_b)
+                        .to_string()
                 };
 
                 // Type tag
@@ -517,7 +648,8 @@ pub fn display_console(
 
                 // Format and color level/status
                 let colored_level_status = match item.level_or_status.to_uppercase().as_str() {
-                    "ERROR" => item.level_or_status
+                    "ERROR" => item
+                        .level_or_status
                         .truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2)
                         .bold(),
                     "WARN" | "WARNING" => item.level_or_status.yellow().bold(),
@@ -529,23 +661,27 @@ pub fn display_console(
 
                 // Format attributes
                 let mut attrs_to_display: Vec<String> = Vec::new();
-                
+
                 // Add the item's own attributes
                 for attr in &item.attributes {
                     attrs_to_display.push(format_keyvalue(attr));
                 }
-                
-                // If it's an Event, also add parent span attributes with "span." prefix
+
+                // If it's an Event, also add parent span attributes
                 if let Some(parent_attrs) = &item.parent_span_attributes {
                     for attr in parent_attrs {
                         let value_str = format_anyvalue(&attr.value);
-                        attrs_to_display.push(format!("span.{}: {}", attr.key.bright_black(), value_str));
+                        attrs_to_display.push(format!(
+                            "{}: {}",
+                            attr.key.bright_black(),
+                            value_str
+                        ));
                     }
                 }
 
                 // Format the attrs suffix
                 let attrs_suffix = if !attrs_to_display.is_empty() {
-                    format!(" - Attrs: {}", attrs_to_display.join(", "))
+                    format!(" - {}", attrs_to_display.join(", "))
                 } else {
                     String::new()
                 };
@@ -555,7 +691,7 @@ pub fn display_console(
                     "{} {} [{}] {} {} {}{}",
                     formatted_time.bright_black(),
                     colored_span_id_prefix,
-                    item.service_name, // Uncolored service name
+                    item.service_name,
                     type_tag,
                     level_status_tag,
                     item.name,
@@ -652,7 +788,7 @@ fn add_span_to_table(
 ) -> Result<()> {
     let indent = "  ".repeat(depth);
 
-    // Get color based on the coloring mode
+    // --- Get Color (still needed for timeline bar) ---
     let (r, g, b) = match color_by {
         ColoringMode::Service => theme.get_color_for_service(&node.service_name),
         ColoringMode::Span => theme.get_color_for_span(&node.id),
@@ -679,39 +815,39 @@ fn add_span_to_table(
         trace_start_time_ns,
         trace_duration_ns,
         timeline_width,
-        (r, g, b), // Pass service color to render_bar
+        (r, g, b), // Pass color to render_bar
     );
 
     // Get the actual span object for additional data
     let span_obj = span_map.get(&node.id);
-    
+
     // Format span kind (uncolored)
-    let kind_cell_content = span_obj.map_or("UNKNOWN".to_string(), |span| format_span_kind(span.kind))
-                                   .chars().take(SPAN_KIND_WIDTH).collect::<String>();
-    
-    // Format span ID prefix (uncolored initially)
+    let kind_cell_content = span_obj
+        .map_or("UNKNOWN".to_string(), |span| format_span_kind(span.kind))
+        .chars()
+        .take(SPAN_KIND_WIDTH)
+        .collect::<String>();
+
     let span_id_prefix = node.id.chars().take(8).collect::<String>();
-    // ADD COLORING BACK for Span ID
-    let colored_span_id_prefix = if node.status_code == status::StatusCode::Error {
+    let colored_span_id_str = if node.status_code == status::StatusCode::Error {
         span_id_prefix
             .truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2)
             .to_string()
     } else {
-        span_id_prefix.truecolor(r, g, b).to_string() // Use service color
+        span_id_prefix.truecolor(r, g, b).to_string()
     };
 
-    // Format status cell
-    let status_content = format_span_status(node.status_code);
-    // No need to truncate as format_span_status returns short strings
+    let status_content_str = format_span_status(node.status_code);
 
-    table.add_row(row![
-        service_name_content,
-        span_name_cell_content,
-        kind_cell_content,
-        r -> duration_content, // Right-align the duration
-        colored_span_id_prefix,
-        status_content,
-        bar_cell_content
+
+    table.add_row(vec![
+        Cell::new(service_name_content),
+        Cell::new(span_name_cell_content),
+        Cell::new(kind_cell_content),
+        Cell::new(duration_content).set_alignment(CellAlignment::Right), // Right-align duration
+        Cell::new(colored_span_id_str),
+        Cell::new(status_content_str),
+        Cell::new(bar_cell_content),
     ]);
 
     let mut children = node.children.clone();
@@ -740,7 +876,7 @@ fn render_bar(
     trace_start_time_ns: u64,
     trace_duration_ns: u64,
     timeline_width: usize,
-    service_color: (u8, u8, u8), 
+    service_color: (u8, u8, u8),
 ) -> String {
     // If there's no duration, return empty space
     if trace_duration_ns == 0 {
@@ -789,27 +925,13 @@ fn format_keyvalue(kv: &KeyValue) -> String {
 fn format_anyvalue(av: &Option<AnyValue>) -> String {
     match av {
         Some(any_value) => match &any_value.value {
-            Some(opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(s)) => {
-                s.clone()
-            }
-            Some(opentelemetry_proto::tonic::common::v1::any_value::Value::BoolValue(b)) => {
-                b.to_string()
-            }
-            Some(opentelemetry_proto::tonic::common::v1::any_value::Value::IntValue(i)) => {
-                i.to_string()
-            }
-            Some(opentelemetry_proto::tonic::common::v1::any_value::Value::DoubleValue(d)) => {
-                d.to_string()
-            }
-            Some(opentelemetry_proto::tonic::common::v1::any_value::Value::ArrayValue(_)) => {
-                "[array]".to_string()
-            }
-            Some(opentelemetry_proto::tonic::common::v1::any_value::Value::KvlistValue(_)) => {
-                "[kvlist]".to_string()
-            }
-            Some(opentelemetry_proto::tonic::common::v1::any_value::Value::BytesValue(_)) => {
-                "[bytes]".to_string()
-            }
+            Some(ProtoValue::StringValue(s)) => s.clone(),
+            Some(ProtoValue::BoolValue(b)) => b.to_string(),
+            Some(ProtoValue::IntValue(i)) => i.to_string(),
+            Some(ProtoValue::DoubleValue(d)) => d.to_string(),
+            Some(ProtoValue::ArrayValue(_)) => "[array]".to_string(),
+            Some(ProtoValue::KvlistValue(_)) => "[kvlist]".to_string(),
+            Some(ProtoValue::BytesValue(_)) => "[bytes]".to_string(),
             None => "<empty_value>".to_string(),
         },
         None => "<no_value>".to_string(),
@@ -819,8 +941,10 @@ fn format_anyvalue(av: &Option<AnyValue>) -> String {
 fn format_span_status(status_code: status::StatusCode) -> String {
     match status_code {
         status::StatusCode::Ok => "OK".green().to_string(),
-        status::StatusCode::Error => "ERROR".truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2).bold().to_string(),
+        status::StatusCode::Error => "ERROR"
+            .truecolor(ERROR_COLOR.0, ERROR_COLOR.1, ERROR_COLOR.2)
+            .bold()
+            .to_string(),
         status::StatusCode::Unset => "UNSET".dimmed().to_string(),
     }
 }
-
