@@ -3,17 +3,18 @@
 # The extension is used to capture and process Lambda telemetry events
 
 
+# Define a reusable function for building the extension layer
+define build-extension-layer
+	@echo "Building Rust extension layer for $(1)"
+	@cargo lambda build --release --extension --$(2)
+	@echo "Copying extension layer to artifacts directory"
+	@mkdir -p "$(ARTIFACTS_DIR)/extensions"
+	@cp "$(shell cargo metadata --format-version=1 | jq -r '.target_directory')/lambda/extensions/otlp-stdout-kinesis-extension-layer" "$(ARTIFACTS_DIR)/extensions/otlp-stdout-kinesis-extension-layer-$(3)"
+	@chmod +x "$(ARTIFACTS_DIR)/extensions/otlp-stdout-kinesis-extension-layer-$(3)"
+endef
+
 build-ExtensionLayerARM64:
-	@echo "Building Rust extension layer for ARM64"
-	@cargo lambda build --release --extension --arm64 --bin otlp-stdout-kinesis-extension-layer-arm64
-	@echo "Copying extension layer to artifacts directory"
-	@mkdir -p "$(ARTIFACTS_DIR)/extensions"
-	@cp "$(shell cargo metadata --format-version=1 | jq -r '.target_directory')/lambda/extensions/otlp-stdout-kinesis-extension-layer-arm64" "$(ARTIFACTS_DIR)/extensions/"
-	@chmod +x "$(ARTIFACTS_DIR)/extensions/otlp-stdout-kinesis-extension-layer-arm64"
+	$(call build-extension-layer,ARM64,arm64,arm64)
+
 build-ExtensionLayerAMD64:
-	@echo "Building Rust extension layer for AMD64"
-	@cargo lambda build --release --extension --x86-64 --bin otlp-stdout-kinesis-extension-layer-amd64
-	@echo "Copying extension layer to artifacts directory"
-	@mkdir -p "$(ARTIFACTS_DIR)/extensions"
-	@cp "$(shell cargo metadata --format-version=1 | jq -r '.target_directory')/lambda/extensions/otlp-stdout-kinesis-extension-layer-amd64" "$(ARTIFACTS_DIR)/extensions/"	
-	@chmod +x "$(ARTIFACTS_DIR)/extensions/otlp-stdout-kinesis-extension-layer-amd64"
+	$(call build-extension-layer,AMD64,x86-64,amd64)

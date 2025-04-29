@@ -6,14 +6,6 @@ authors.workspace = true
 license.workspace = true
 description = "OpenTelemetry Lambda extension for sending otlp data to Kinesis"
 
-[[bin]]
-name = "otlp-stdout-kinesis-extension-layer-arm64"
-path = "src/main.rs"
-
-[[bin]]
-name = "otlp-stdout-kinesis-extension-layer-amd64" 
-path = "src/main.rs"
-
 [dependencies]
 tokio.workspace = true
 tracing.workspace = true
@@ -22,4 +14,15 @@ aws-sdk-kinesis.workspace = true
 lambda-extension.workspace = true
 uuid.workspace = true
 serde_json.workspace = true
-chrono.workspace = true
+
+
+# Added for platform event conversion and OTLP span export
+otlp-stdout-span-exporter.workspace = true
+opentelemetry.workspace = true
+hex = "0.4"
+chrono = "0.4"
+opentelemetry_sdk = { workspace = true, features = ["trace", "rt-tokio"] }
+opentelemetry-proto = { workspace = true, features = ["trace"] }
+opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_experimental"] }
+rand = { workspace = true }
+lambda-otel-lite = { workspace = true }
