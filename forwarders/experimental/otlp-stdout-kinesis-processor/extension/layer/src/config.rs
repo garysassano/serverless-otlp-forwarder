@@ -14,9 +14,9 @@ pub const ENV_VAR_BUFFER_TIMEOUT_MS: &str = "OTLP_STDOUT_KINESIS_BUFFER_TIMEOUT_
 pub const ENV_VAR_BUFFER_MAX_BYTES: &str = "OTLP_STDOUT_KINESIS_BUFFER_MAX_BYTES";
 pub const ENV_VAR_BUFFER_MAX_ITEMS: &str = "OTLP_STDOUT_KINESIS_BUFFER_MAX_ITEMS";
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config {
-    pub kinesis_stream_name: String,
+    pub kinesis_stream_name: Option<String>,
     pub buffer_timeout_ms: u32,
     pub buffer_max_bytes: usize,
     pub buffer_max_items: usize,
@@ -24,12 +24,13 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self, Error> {
-        let kinesis_stream_name = env::var(ENV_VAR_STREAM_NAME).map_err(|e| {
-            Error::from(format!(
-                "Failed to get stream name: {}. Make sure to set the {} environment variable.",
-                e, ENV_VAR_STREAM_NAME
-            ))
-        })?;
+        let kinesis_stream_name = env::var(ENV_VAR_STREAM_NAME).ok();
+
+        if kinesis_stream_name.is_none() {
+            tracing::info!("{} not set, disabling Kinesis output. Will write OTLP JSON to stdout.", ENV_VAR_STREAM_NAME);
+        } else {
+            tracing::info!("Kinesis stream name set: {}", kinesis_stream_name.as_ref().unwrap());
+        }
 
         let buffer_timeout_ms = env::var(ENV_VAR_BUFFER_TIMEOUT_MS)
             .map(|v| v.parse::<u32>().unwrap_or(DEFAULT_BUFFER_TIMEOUT_MS))

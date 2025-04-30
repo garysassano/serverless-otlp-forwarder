@@ -26,3 +26,4 @@ opentelemetry-proto = { workspace = true, features = ["trace"] }
 opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_experimental"] }
 rand = { workspace = true }
 lambda-otel-lite = { workspace = true }
+nix = { workspace = true, features = ["fs"] }

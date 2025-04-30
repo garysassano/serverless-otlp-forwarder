@@ -20,7 +20,6 @@ use std::sync::Arc;
 
 use aws_credential_types::provider::ProvideCredentials;
 use otlp_sigv4_client::SigV4ClientBuilder;
-use otlp_stdout_span_exporter::ExporterOutput;
 use otlp_stdout_logs_processor::{
     collectors::Collectors,
     processing::process_telemetry_batch,
@@ -28,6 +27,7 @@ use otlp_stdout_logs_processor::{
     telemetry::TelemetryData,
     AppState, KinesisEventWrapper,
 };
+use otlp_stdout_span_exporter::ExporterOutput;
 
 use lambda_otel_lite::{init_telemetry, OtelTracingLayer, TelemetryConfig};
 

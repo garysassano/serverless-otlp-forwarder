@@ -8,7 +8,9 @@ use opentelemetry::{
 use opentelemetry_sdk::trace::{SpanData, SpanEvents, SpanLinks};
 use rand::Rng;
 use std::time::{Duration as StdDuration, SystemTime};
-use tracing;
+use std::collections::HashMap;
+use opentelemetry::Value as OtelValue;
+use std::borrow::Cow;
 
 #[derive(Debug)]
 pub struct SpanAggregator {
@@ -271,5 +273,403 @@ impl SpanAggregator {
             };
             self.child_spans_data.push(child_span_data);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*; // Import items from outer module
+    use crate::xray::ParsedXrayTraceContext;
+    use chrono::TimeZone;
+    use opentelemetry::trace::TraceFlags;
+    use std::collections::HashMap;
+
+    // Helper to create a default timestamp
+    fn default_ts() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn test_aggregator_new() {
+        let request_id = "test-req-id".to_string();
+        let timestamp = default_ts();
+        let agg = SpanAggregator::new(request_id.clone(), timestamp);
+
+        assert_eq!(agg.request_id, request_id);
+        assert!(agg.trace_id.is_none());
+        assert!(agg.span_id.is_none());
+        assert!(agg.parent_id.is_none());
+        assert_eq!(agg.trace_flags, TraceFlags::NOT_SAMPLED);
+        assert!(agg.start_time.is_none());
+        assert!(agg.end_time.is_none());
+        assert_eq!(agg.status, OtelStatus::Unset);
+        assert_eq!(agg.name, "Lambda Invoke");
+        assert!(matches!(agg.kind, SpanKind::Server));
+        assert!(agg.attributes.is_empty());
+        assert!(agg.child_spans_data.is_empty());
+        assert!(agg.received_event_types.is_empty());
+        assert_eq!(agg.first_seen_timestamp, timestamp);
+        assert_eq!(agg.last_updated_timestamp, timestamp);
+    }
+
+    #[test]
+    fn test_update_from_start_event() {
+        let request_id = "req-start".to_string();
+        let timestamp = default_ts();
+        let mut agg = SpanAggregator::new(request_id.clone(), timestamp);
+
+        let trace_id = TraceId::from_hex("0102030405060708090a0b0c0d0e0f10").unwrap();
+        let parent_id = SpanId::from_hex("0102030405060708").unwrap();
+        let platform_span_id = SpanId::from_hex("1011121314151617").unwrap();
+
+        let start_event = ParsedPlatformEvent {
+            timestamp,
+            request_id,
+            data: PlatformEventData::Start {
+                version: Some("1.0".to_string()),
+                trace_context: Some(ParsedXrayTraceContext {
+                    trace_id,
+                    parent_id: Some(parent_id),
+                    sampled: true,
+                    platform_span_id: Some(platform_span_id),
+                }),
+            },
+        };
+
+        agg.update_from_event(&start_event);
+
+        assert_eq!(agg.start_time, Some(timestamp.into()));
+        assert_eq!(agg.trace_id, Some(trace_id));
+        assert_eq!(agg.parent_id, Some(parent_id));
+        assert_eq!(agg.trace_flags, TraceFlags::SAMPLED);
+        assert_eq!(agg.span_id, Some(platform_span_id));
+        assert_eq!(agg.received_event_types, vec!["platform.start"]);
+        assert_eq!(agg.last_updated_timestamp, timestamp);
+        // Check attribute was added
+        assert!(agg
+            .attributes
+            .iter()
+            .any(|kv| kv.key == KeyValue::new("faas.instance", "").key && kv.value.as_str() == "1.0"));
+    }
+
+    #[test]
+    fn test_update_from_runtime_done_event_success() {
+        let request_id = "req-rtd-success".to_string();
+        let timestamp = default_ts();
+        let mut agg = SpanAggregator::new(request_id.clone(), timestamp);
+
+        let mut metrics = HashMap::new();
+        metrics.insert("runtime.durationMs".to_string(), OtelValue::F64(123.45));
+        metrics.insert("runtime.producedBytes".to_string(), OtelValue::I64(1024));
+
+        let runtime_done_event = ParsedPlatformEvent {
+            timestamp: timestamp + chrono::Duration::milliseconds(200), // Slightly later ts
+            request_id,
+            data: PlatformEventData::RuntimeDone {
+                status: LambdaStatus::Success,
+                error_type: None,
+                metrics, // Pass the created metrics map
+                spans: vec![], // No child spans for this test
+                trace_context: None, // Assume trace context came from Start
+            },
+        };
+
+        agg.update_from_event(&runtime_done_event);
+
+        assert_eq!(agg.status, OtelStatus::Ok); // Status should be Ok
+        assert_eq!(agg.received_event_types, vec!["platform.runtimeDone"]);
+        assert_eq!(agg.last_updated_timestamp, runtime_done_event.timestamp);
+        // Check metric attributes were added
+        assert!(agg.attributes.iter().any(|kv| kv.key
+            == KeyValue::new("lambda.runtime.runtime.durationMs", "").key
+            && kv.value == OtelValue::F64(123.45)));
+        assert!(agg.attributes.iter().any(|kv| kv.key
+            == KeyValue::new("lambda.runtime.runtime.producedBytes", "").key
+            && kv.value == OtelValue::I64(1024)));
+    }
+
+    #[test]
+    fn test_update_from_runtime_done_event_failure() {
+        let request_id = "req-rtd-fail".to_string();
+        let timestamp = default_ts();
+        let mut agg = SpanAggregator::new(request_id.clone(), timestamp);
+
+        let runtime_done_event = ParsedPlatformEvent {
+            timestamp: timestamp + chrono::Duration::milliseconds(200),
+            request_id,
+            data: PlatformEventData::RuntimeDone {
+                status: LambdaStatus::Failure,
+                error_type: Some("Error".to_string()),
+                metrics: HashMap::new(),
+                spans: vec![],
+                trace_context: None,
+            },
+        };
+
+        agg.update_from_event(&runtime_done_event);
+
+        assert!(matches!(agg.status, OtelStatus::Error { .. }));
+        if let OtelStatus::Error { description } = agg.status {
+            assert_eq!(description, Cow::Borrowed("Error"));
+        }
+        assert_eq!(agg.received_event_types, vec!["platform.runtimeDone"]);
+        assert_eq!(agg.last_updated_timestamp, runtime_done_event.timestamp);
+    }
+
+    #[test]
+    fn test_update_from_report_event() {
+        let request_id = "req-report".to_string();
+        let timestamp = default_ts();
+        let mut agg = SpanAggregator::new(request_id.clone(), timestamp);
+
+        // Simulate receiving RuntimeDone first (optional, but good test)
+        let runtime_done_event = ParsedPlatformEvent {
+            timestamp: timestamp + chrono::Duration::milliseconds(200),
+            request_id: request_id.clone(),
+            data: PlatformEventData::RuntimeDone {
+                status: LambdaStatus::Success, // Initially success
+                error_type: None,
+                metrics: HashMap::new(),
+                spans: vec![],
+                trace_context: None,
+            },
+        };
+        agg.update_from_event(&runtime_done_event);
+        assert_eq!(agg.status, OtelStatus::Ok);
+
+        // Now receive Report event with failure
+        let report_timestamp = timestamp + chrono::Duration::milliseconds(300);
+        let mut report_metrics = HashMap::new();
+        report_metrics.insert("report.durationMs".to_string(), OtelValue::F64(250.0));
+        report_metrics.insert("report.billedDurationMs".to_string(), OtelValue::I64(300));
+
+        let report_event = ParsedPlatformEvent {
+            timestamp: report_timestamp,
+            request_id,
+            data: PlatformEventData::Report {
+                status: LambdaStatus::Failure, // Failure in report
+                error_type: Some("ReportError".to_string()),
+                metrics: report_metrics,
+                spans: vec![],
+                trace_context: None,
+            },
+        };
+
+        agg.update_from_event(&report_event);
+
+        // Check end_time is set
+        assert_eq!(agg.end_time, Some(report_timestamp.into()));
+        // Check status is updated to Error by Report
+        assert!(matches!(agg.status, OtelStatus::Error { .. }));
+        if let OtelStatus::Error { description } = agg.status {
+            assert_eq!(description, Cow::Borrowed("ReportError"));
+        }
+        assert_eq!(agg.received_event_types, vec!["platform.runtimeDone", "platform.report"]);
+        assert_eq!(agg.last_updated_timestamp, report_timestamp);
+        // Check report metrics are added
+        assert!(agg.attributes.iter().any(|kv| kv.key
+            == KeyValue::new("lambda.report.report.durationMs", "").key
+            && kv.value == OtelValue::F64(250.0)));
+        // Check faas.execution attribute added
+        assert!(agg.attributes.iter().any(|kv| kv.key
+            == KeyValue::new("faas.execution", "").key
+            && kv.value == OtelValue::String("req-report".into())));
+    }
+
+    #[test]
+    fn test_is_complete() {
+        let request_id = "req-complete".to_string();
+        let timestamp = default_ts();
+        let mut agg = SpanAggregator::new(request_id.clone(), timestamp);
+
+        assert!(!agg.is_complete());
+
+        // Add Start
+        let start_event = ParsedPlatformEvent {
+            timestamp, request_id: request_id.clone(), data: PlatformEventData::Start { version: None, trace_context: None }
+        };
+        agg.update_from_event(&start_event);
+        assert!(!agg.is_complete());
+
+        // Add RuntimeDone
+        let runtime_done_event = ParsedPlatformEvent {
+            timestamp: timestamp + chrono::Duration::milliseconds(100),
+            request_id: request_id.clone(),
+            data: PlatformEventData::RuntimeDone {
+                status: LambdaStatus::Success, error_type: None, metrics: HashMap::new(), spans: vec![], trace_context: None
+            }
+        };
+        agg.update_from_event(&runtime_done_event);
+        assert!(!agg.is_complete()); // Still needs Report
+
+        // Add Report
+        let report_event = ParsedPlatformEvent {
+            timestamp: timestamp + chrono::Duration::milliseconds(200),
+            request_id: request_id.clone(),
+            data: PlatformEventData::Report {
+                status: LambdaStatus::Success, error_type: None, metrics: HashMap::new(), spans: vec![], trace_context: None
+            }
+        };
+        agg.update_from_event(&report_event);
+        assert!(agg.is_complete()); // Now complete
+    }
+
+    #[test]
+    fn test_to_otel_span_data_missing_fields() {
+        let request_id = "req-otel-missing".to_string();
+        let timestamp = default_ts();
+        let mut agg = SpanAggregator::new(request_id.clone(), timestamp);
+
+        // Initially, all fields are missing
+        assert!(agg.to_otel_span_data().is_none(), "Should be None initially");
+
+        // Set start_time only
+        agg.start_time = Some(timestamp.into());
+        assert!(agg.to_otel_span_data().is_none(), "Should be None with only start_time");
+
+        // Set trace_id only (start_time is still set)
+        agg.trace_id = Some(TraceId::from_hex("01000000000000000000000000000001").unwrap());
+        assert!(agg.to_otel_span_data().is_none(), "Should be None with start_time and trace_id");
+
+        // Set span_id (now all required fields are present)
+        agg.span_id = Some(SpanId::from_hex("0100000000000002").unwrap());
+        assert!(agg.to_otel_span_data().is_some(), "Should be Some when trace_id, span_id, and start_time are set");
+    }
+
+    #[test]
+    fn test_to_otel_span_data_success() {
+        let request_id = "req-otel-success".to_string();
+        let timestamp = default_ts();
+        let mut agg = SpanAggregator::new(request_id.clone(), timestamp);
+
+        let trace_id = TraceId::from_hex("0102030405060708090a0b0c0d0e0f11").unwrap();
+        let span_id = SpanId::from_hex("1112131415161718").unwrap();
+        let parent_id = SpanId::from_hex("2122232425262728").unwrap();
+        let start_system_time: SystemTime = timestamp.into();
+        let end_system_time: SystemTime = (timestamp + chrono::Duration::milliseconds(100)).into();
+
+        // Set required fields
+        agg.trace_id = Some(trace_id);
+        agg.span_id = Some(span_id);
+        agg.parent_id = Some(parent_id);
+        agg.start_time = Some(start_system_time);
+        agg.end_time = Some(end_system_time);
+        agg.trace_flags = TraceFlags::SAMPLED;
+        agg.status = OtelStatus::Ok;
+        // Use ::from for OtelValue::String
+        agg.attributes.push(KeyValue::new("test.key", OtelValue::from("test.value")));
+
+        let span_data_opt = agg.to_otel_span_data();
+        assert!(span_data_opt.is_some());
+        let span_data = span_data_opt.unwrap();
+
+        assert_eq!(span_data.span_context.trace_id(), trace_id);
+        assert_eq!(span_data.span_context.span_id(), span_id);
+        assert_eq!(span_data.span_context.trace_flags(), TraceFlags::SAMPLED);
+        assert_eq!(span_data.parent_span_id, parent_id);
+        assert_eq!(span_data.name.as_ref(), "Lambda Invoke"); // Compare Cow as &str
+        assert_eq!(span_data.start_time, start_system_time);
+        assert_eq!(span_data.end_time, end_system_time);
+        assert_eq!(span_data.status, OtelStatus::Ok);
+        assert_eq!(span_data.attributes.len(), 1);
+        assert_eq!(span_data.attributes[0].key, KeyValue::new("test.key", "").key);
+        // Use ::from for comparison value as well
+        assert_eq!(span_data.attributes[0].value, OtelValue::from("test.value"));
+    }
+
+    #[test]
+    fn test_to_otel_span_data_fallback_end_time() {
+         let request_id = "req-otel-fallback".to_string();
+        let timestamp = default_ts();
+        let mut agg = SpanAggregator::new(request_id.clone(), timestamp);
+
+        let start_system_time: SystemTime = timestamp.into();
+        let last_update_system_time: SystemTime = (timestamp + chrono::Duration::milliseconds(500)).into();
+
+        agg.trace_id = Some(TraceId::from_hex("01000000000000000000000000000001").unwrap());
+        agg.span_id = Some(SpanId::from_hex("0100000000000002").unwrap());
+        agg.start_time = Some(start_system_time);
+        // No end_time set
+        agg.last_updated_timestamp = timestamp + chrono::Duration::milliseconds(500);
+
+        let span_data = agg.to_otel_span_data().unwrap();
+        // End time should be the last_updated_timestamp converted to SystemTime
+        assert_eq!(span_data.end_time, last_update_system_time);
+    }
+
+    #[test]
+    fn test_child_span_creation() {
+        let request_id = "req-child-spans".to_string();
+        let timestamp = default_ts();
+        let mut agg = SpanAggregator::new(request_id.clone(), timestamp);
+
+        // Set trace_id and span_id for the parent (aggregator)
+        let trace_id = TraceId::from_hex("0102030405060708090a0b0c0d0e0f12").unwrap();
+        let parent_span_id = SpanId::from_hex("1112131415161719").unwrap();
+        agg.trace_id = Some(trace_id);
+        agg.span_id = Some(parent_span_id);
+
+        // Create TelemetrySpans to add
+        let child_start1_dt = timestamp + chrono::Duration::milliseconds(50);
+        let child_start2_dt = timestamp + chrono::Duration::milliseconds(150);
+        let child_start1_st: SystemTime = child_start1_dt.into();
+        let child_start2_st: SystemTime = child_start2_dt.into();
+
+        let telemetry_spans = vec![
+            TelemetrySpan {
+                duration_ms: 50.0,
+                name: "child1".to_string(),
+                start: child_start1_dt,
+            },
+            TelemetrySpan {
+                duration_ms: 75.5,
+                name: "child2".to_string(),
+                start: child_start2_dt,
+            },
+        ];
+
+        // Use a RuntimeDone event to add the spans
+        let runtime_done_event = ParsedPlatformEvent {
+            timestamp: timestamp + chrono::Duration::milliseconds(300),
+            request_id,
+            data: PlatformEventData::RuntimeDone {
+                status: LambdaStatus::Success,
+                error_type: None,
+                metrics: HashMap::new(),
+                spans: telemetry_spans, // Pass the child spans
+                trace_context: None,
+            },
+        };
+
+        agg.update_from_event(&runtime_done_event);
+
+        // Verify child_spans_data
+        assert_eq!(agg.child_spans_data.len(), 2);
+
+        // Check first child span
+        let child1 = &agg.child_spans_data[0];
+        assert_eq!(child1.span_context.trace_id(), trace_id);
+        assert_ne!(child1.span_context.span_id(), parent_span_id);
+        assert_ne!(child1.span_context.span_id(), SpanId::INVALID);
+        assert_eq!(child1.parent_span_id, parent_span_id);
+        assert_eq!(child1.name.as_ref(), "child1");
+        // Compare SystemTime directly
+        assert_eq!(child1.start_time, child_start1_st);
+        let expected_end1: SystemTime = (child_start1_dt + chrono::Duration::microseconds(50000)).into();
+        assert_eq!(child1.end_time, expected_end1);
+        assert!(matches!(child1.span_kind, SpanKind::Internal));
+
+        // Check second child span
+        let child2 = &agg.child_spans_data[1];
+        assert_eq!(child2.span_context.trace_id(), trace_id);
+        assert_ne!(child2.span_context.span_id(), parent_span_id);
+        assert_ne!(child2.span_context.span_id(), child1.span_context.span_id());
+        assert_eq!(child2.parent_span_id, parent_span_id);
+        assert_eq!(child2.name.as_ref(), "child2");
+        // Compare SystemTime directly
+        assert_eq!(child2.start_time, child_start2_st);
+        let expected_end2: SystemTime = (child_start2_dt + chrono::Duration::microseconds(75500)).into();
+        assert_eq!(child2.end_time, expected_end2);
+        assert!(matches!(child2.span_kind, SpanKind::Internal));
     }
 }
