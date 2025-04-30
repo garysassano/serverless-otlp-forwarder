@@ -18,7 +18,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
-// Import AsyncWriteExt trait AND io module
+// Import for pipe reading
+use tokio::fs::File;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::io::AsyncWriteExt;
 
 // Add the modules
@@ -26,7 +28,6 @@ mod aggregation;
 mod config;
 mod events;
 mod kinesis;
-mod pipe_reader;
 mod types;
 mod xray;
 
@@ -34,8 +35,7 @@ mod xray;
 use aggregation::SpanAggregator;
 use config::Config;
 use events::{ParsedPlatformEvent, PlatformEventData, TelemetrySpan};
-use kinesis::{KinesisBatch, RECORD_PREFIX};
-use pipe_reader::pipe_reader_task;
+use kinesis::KinesisBatch;
 use types::ProcessorInput;
 
 // Re-add chrono for timeout logic
@@ -272,9 +272,9 @@ async fn main() -> Result<(), Error> {
         let pipe_path_str = PIPE_PATH.to_string();
         tokio::task::spawn_blocking(move || {
             match mkfifo(pipe_path_str.as_str(), Mode::S_IRWXU | Mode::S_IRWXG | Mode::S_IRWXO) {
-                Ok(_) => tracing::info!("Created named pipe: {}", pipe_path_str),
+                Ok(_) => tracing::debug!("Created named pipe: {}", pipe_path_str),
                 Err(Errno::EEXIST) => {
-                    tracing::info!("Named pipe already exists: {}", pipe_path_str);
+                    tracing::debug!("Named pipe already exists: {}", pipe_path_str);
                 }
                 Err(e) => {
                     panic!("Failed to create named pipe {}: {}", pipe_path_str, e);
@@ -282,7 +282,7 @@ async fn main() -> Result<(), Error> {
             }
         }).await.map_err(|e| Error::from(format!("Pipe creation task failed: {}", e)))?;
     } else {
-        tracing::info!("Named pipe already exists: {}", PIPE_PATH);
+        tracing::debug!("Named pipe already exists: {}", PIPE_PATH);
     }
     // --- Create Named Pipe --- END ---
 
@@ -291,13 +291,9 @@ async fn main() -> Result<(), Error> {
     let aws_config = aws_config::from_env().load().await;
     let kinesis_client = KinesisClient::new(&aws_config);
 
-    // --- Create Unified Channel ---
-    let (processor_input_tx, processor_input_rx) = mpsc::channel::<ProcessorInput>(2048);
-    // --- Create Unified Channel --- END ---
-
-    // --- Spawn Pipe Reader Task ---
-    tokio::spawn(pipe_reader_task(processor_input_tx.clone()));
-    // --- Spawn Pipe Reader Task --- END ---
+    // --- Create Channel for Platform Telemetry ---
+    let (telemetry_tx, telemetry_rx) = mpsc::channel::<ProcessorInput>(2048);
+    // --- Create Channel for Platform Telemetry --- END ---
 
     let exporter = OtlpStdoutSpanExporter::builder()
         .resource(get_lambda_resource())
@@ -311,12 +307,12 @@ async fn main() -> Result<(), Error> {
         batch: Mutex::new(KinesisBatch::default()),
         aggregations,
         exporter,
-        processor_input_rx: Mutex::new(processor_input_rx),
+        processor_input_rx: Mutex::new(telemetry_rx),
     });
 
-    let telemetry_tx = processor_input_tx.clone();
+    let telemetry_tx_clone = telemetry_tx.clone();
     let telemetry_handler_fn = move |events: Vec<LambdaTelemetry>| {
-        let tx = telemetry_tx.clone();
+        let tx = telemetry_tx_clone.clone();
         async move { telemetry_handler(events, tx).await }
     };
 
@@ -330,147 +326,161 @@ async fn main() -> Result<(), Error> {
         let state = processor_state.clone();
 
         async move {
-            // --- Wait for first message (blocking) then drain rest (non-blocking) --- START ---
-            let mut received_first = false;
-            loop {
-                let mut receiver_guard = state.processor_input_rx.lock().await;
-                let maybe_input = if !received_first {
-                    // Block waiting for the first message for this INVOKE cycle
-                    // This relies on the pipe reader eventually sending something (data or signal)
-                    receiver_guard.recv().await
-                } else {
-                    // After receiving the first, drain others non-blockingly
-                    match receiver_guard.try_recv() {
-                        Ok(input) => Some(input),
-                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => None, // Drain complete
-                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => None, // Channel closed
-                    }
-                };
-
-                // Process the received message (if any)
-                match maybe_input {
-                    Some(ProcessorInput::OtlpJson(line)) => {
-                        drop(receiver_guard); // Drop lock ASAP
-                        if !received_first {
-                            tracing::debug!("EventsProcessor: Received first OtlpJson");
-                            received_first = true;
-                        } else {
-                            tracing::debug!("EventsProcessor: Drained OtlpJson");
-                        }
-                        if state.stream_name.is_some() {
-                            let mut kinesis_batch = state.batch.lock().await;
-                            if let Err(e) = kinesis_batch.add_record(line) {
-                                tracing::error!("Failed to add record to Kinesis batch: {}", e);
-                            }
-                        } else {
-                            println!("{}", line);
-                        }
-                    }
-                    Some(ProcessorInput::PlatformTelemetry(parsed_event)) => {
-                        drop(receiver_guard); // Drop lock ASAP
-                        if !received_first {
-                            tracing::debug!(
-                                "EventsProcessor: Received first PlatformTelemetry for request_id: {}",
-                                parsed_event.request_id
-                            );
-                            received_first = true;
-                        } else {
-                            tracing::debug!(
-                                "EventsProcessor: Drained PlatformTelemetry for request_id: {}",
-                                parsed_event.request_id
-                            );
-                        }
-                        let mut aggregations_map = state.aggregations.lock().await;
-                        let key = parsed_event.request_id.clone();
-                        let mut completed_spans: Vec<SpanData> = Vec::new();
-
-                        if let Some(agg) = aggregations_map.get_mut(&key) {
-                            agg.update_from_event(&parsed_event);
-                            if agg.is_complete() {
-                                if let Some(span_data) = agg.to_otel_span_data() {
-                                    completed_spans.push(span_data);
-                                    completed_spans.append(&mut agg.child_spans_data);
-                                }
-                                aggregations_map.remove(&key);
-                            }
-                        } else {
-                            let mut new_agg = SpanAggregator::new(key, parsed_event.timestamp);
-                            new_agg.update_from_event(&parsed_event);
-                            if new_agg.is_complete() {
-                                if let Some(span_data) = new_agg.to_otel_span_data() {
-                                    completed_spans.push(span_data);
-                                    completed_spans.append(&mut new_agg.child_spans_data);
-                                }
-                            } else {
-                                aggregations_map.insert(new_agg.request_id.clone(), new_agg);
-                            }
-                        }
-                        drop(aggregations_map); // Drop lock before await
-
-                        if !completed_spans.is_empty() {
-                            tracing::debug!("Exporting {} completed/aggregated spans", completed_spans.len());
-                            match state.exporter.export(completed_spans).await {
-                                Ok(_) => tracing::debug!("Successfully exported aggregated spans"),
-                                Err(e) => tracing::error!("Failed to export aggregated spans: {:?}", e),
-                            }
-                        }
-                    }
-                    None => {
-                        // No message received (timed out waiting for first, or drain complete, or disconnected)
-                        drop(receiver_guard);
-                        if !received_first {
-                            tracing::debug!("No input received on channel for this cycle.");
-                        } else {
-                            tracing::debug!("Finished draining channel for this cycle.");
-                        }
-                        break; // Exit the processing loop
-                    }
-                }
-            } // End loop
-            // --- Wait for first message / Drain Unified Channel Loop --- END ---
-
-            // --- Handle Aggregation Timeouts --- START ---
-            let mut timed_out_spans: Vec<SpanData> = Vec::new();
-            {
-                let mut aggregations_map = state.aggregations.lock().await;
-                let now = Utc::now();
-
-                // Use retain to efficiently remove timed-out aggregations while checking
-                aggregations_map.retain(|key, agg| {
-                    if (now - agg.first_seen_timestamp) > aggregation_timeout {
-                        tracing::warn!("Aggregation for request_id '{}' timed out after {:?}. Emitting.", key, aggregation_timeout);
-                        // Collect spans to export if timed out
-                        if let Some(span_data) = agg.to_otel_span_data() {
-                            timed_out_spans.push(span_data);
-                            timed_out_spans.append(&mut agg.child_spans_data);
-                        }
-                        false // Remove from map
-                    } else {
-                        true // Keep in map
-                    }
-                });
-            } // Aggregation map lock released
-
-            // Export timed-out spans (if any) via the exporter (writes to pipe)
-            if !timed_out_spans.is_empty() {
-                tracing::debug!("Exporting {} timed-out spans", timed_out_spans.len());
-                 match state.exporter.export(timed_out_spans).await {
-                    Ok(_) => tracing::debug!("Successfully exported timed-out spans"),
-                    Err(e) => tracing::error!("Failed to export timed-out spans: {:?}", e),
-                 }
-            }
-            // --- Handle Aggregation Timeouts --- END ---
-
-            // --- Handle Lambda Lifecycle Events --- START ---
             match event.next {
                 NextEvent::Invoke(_) => {
-                    tracing::debug!("Received INVOKE event, flushing Kinesis batch if needed");
+                    tracing::debug!("Received INVOKE event, processing pipe data and platform telemetry");
+                    tracing::warn!("Received event: {}", serde_json::to_string(&event).unwrap_or_else(|_| "Failed to serialize event".to_string()));
+                    // --- Read from pipe until EOF --- START ---
+                    // Open the pipe for reading (blocking)
+                    match File::open(PIPE_PATH).await {
+                        Ok(pipe_file) => {
+                            tracing::debug!("Named pipe opened successfully: {}", PIPE_PATH);
+                            let mut reader = BufReader::new(pipe_file);
+                            let mut line_buffer = String::new();
+                            
+                            // Read lines from the pipe until EOF
+                            loop {
+                                match reader.read_line(&mut line_buffer).await {
+                                    Ok(0) => {
+                                        // EOF reached - all spans have been delivered
+                                        tracing::debug!("EOF reached on named pipe - all spans for this invocation processed");
+                                        break; // Exit the pipe reading loop
+                                    }
+                                    Ok(_) => {
+                                        let line = line_buffer.trim_end();
+                                        if !line.is_empty() {
+                                            tracing::debug!("Read line from pipe: {}", line);
+                                            // Process the OTLP JSON data
+                                            if state.stream_name.is_some() {
+                                                let mut kinesis_batch = state.batch.lock().await;
+                                                if let Err(e) = kinesis_batch.add_record(line.to_string()) {
+                                                    tracing::error!("Failed to add record to Kinesis batch: {}", e);
+                                                }
+                                            } else {
+                                                println!("{}", line);
+                                            }
+                                        }
+                                        line_buffer.clear();
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Error reading line from named pipe {}: {}", PIPE_PATH, e);
+                                        break; // Break on error, will retry on next invocation
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to open named pipe {} for reading: {}", PIPE_PATH, e);
+                        }
+                    }
+                    // --- Read from pipe until EOF --- END ---
+                    
+                    // --- Process any platform telemetry that was received --- START ---
+                    // Drain the platform telemetry channel (non-blocking)
+                    loop {
+                        let mut receiver_guard = state.processor_input_rx.lock().await;
+                        match receiver_guard.try_recv() {
+                            Ok(ProcessorInput::PlatformTelemetry(parsed_event)) => {
+                                drop(receiver_guard); // Drop lock ASAP
+                                tracing::debug!(
+                                    "Processing platform telemetry for request_id: {}",
+                                    parsed_event.request_id
+                                );
+                                
+                                let mut aggregations_map = state.aggregations.lock().await;
+                                let key = parsed_event.request_id.clone();
+                                let mut completed_spans: Vec<SpanData> = Vec::new();
+
+                                if let Some(agg) = aggregations_map.get_mut(&key) {
+                                    agg.update_from_event(&parsed_event);
+                                    if agg.is_complete() {
+                                        if let Some(span_data) = agg.to_otel_span_data() {
+                                            completed_spans.push(span_data);
+                                            completed_spans.append(&mut agg.child_spans_data);
+                                        }
+                                        aggregations_map.remove(&key);
+                                    }
+                                } else {
+                                    let mut new_agg = SpanAggregator::new(key, parsed_event.timestamp);
+                                    new_agg.update_from_event(&parsed_event);
+                                    if new_agg.is_complete() {
+                                        if let Some(span_data) = new_agg.to_otel_span_data() {
+                                            completed_spans.push(span_data);
+                                            completed_spans.append(&mut new_agg.child_spans_data);
+                                        }
+                                    } else {
+                                        aggregations_map.insert(new_agg.request_id.clone(), new_agg);
+                                    }
+                                }
+                                drop(aggregations_map); // Drop lock before await
+
+                                if !completed_spans.is_empty() {
+                                    tracing::debug!("Exporting {} completed/aggregated spans", completed_spans.len());
+                                    match state.exporter.export(completed_spans).await {
+                                        Ok(_) => tracing::debug!("Successfully exported aggregated spans"),
+                                        Err(e) => tracing::error!("Failed to export aggregated spans: {:?}", e),
+                                    }
+                                }
+                            }
+                            Ok(_) => {
+                                // Should never happen since we only send PlatformTelemetry to this channel
+                                drop(receiver_guard);
+                                tracing::warn!("Received unexpected message type in platform telemetry channel");
+                            }
+                            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                                // No more telemetry to process
+                                drop(receiver_guard);
+                                break;
+                            }
+                            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                                // Channel closed - shouldn't happen in normal operation
+                                drop(receiver_guard);
+                                tracing::warn!("Platform telemetry channel disconnected");
+                                break;
+                            }
+                        }
+                    }
+                    // --- Process platform telemetry --- END ---
+                    
+                    // --- Handle Aggregation Timeouts --- START ---
+                    let mut timed_out_spans: Vec<SpanData> = Vec::new();
+                    {
+                        let mut aggregations_map = state.aggregations.lock().await;
+                        let now = Utc::now();
+
+                        // Use retain to efficiently remove timed-out aggregations while checking
+                        aggregations_map.retain(|key, agg| {
+                            if (now - agg.first_seen_timestamp) > aggregation_timeout {
+                                tracing::warn!("Aggregation for request_id '{}' timed out after {:?}. Emitting.", key, aggregation_timeout);
+                                // Collect spans to export if timed out
+                                if let Some(span_data) = agg.to_otel_span_data() {
+                                    timed_out_spans.push(span_data);
+                                    timed_out_spans.append(&mut agg.child_spans_data);
+                                }
+                                false // Remove from map
+                            } else {
+                                true // Keep in map
+                            }
+                        });
+                    } // Aggregation map lock released
+
+                    // Export timed-out spans (if any) via the exporter (writes to pipe)
+                    if !timed_out_spans.is_empty() {
+                        tracing::debug!("Exporting {} timed-out spans", timed_out_spans.len());
+                        match state.exporter.export(timed_out_spans).await {
+                            Ok(_) => tracing::debug!("Successfully exported timed-out spans"),
+                            Err(e) => tracing::error!("Failed to export timed-out spans: {:?}", e),
+                        }
+                    }
+                    // --- Handle Aggregation Timeouts --- END ---
+                    
+                    // Flush Kinesis batch
                     if let Err(e) = state.flush_batch().await {
                         tracing::error!("Error flushing Kinesis batch on INVOKE: {}", e);
                     }
                 }
                 NextEvent::Shutdown(_) => {
-                    tracing::info!(
+                    tracing::debug!(
                         "Received SHUTDOWN event, flushing final aggregations and Kinesis batch"
                     );
 
@@ -492,12 +502,12 @@ async fn main() -> Result<(), Error> {
                     // Export the final spans (if any) via the exporter (writes to pipe)
                     if !final_spans_to_export.is_empty() {
                         tracing::debug!("Exporting {} final spans on shutdown", final_spans_to_export.len());
-                         match state.exporter.export(final_spans_to_export).await {
+                        match state.exporter.export(final_spans_to_export).await {
                             Ok(_) => tracing::debug!("Successfully exported final spans on shutdown"),
                             Err(e) => {
                                 tracing::error!("Failed to export final spans on shutdown: {:?}", e)
                             }
-                         }
+                        }
                     }
                     // --- Final Aggregation Flush --- END ---
 
@@ -507,24 +517,32 @@ async fn main() -> Result<(), Error> {
                     }
                 }
             }
-            // --- Handle Lambda Lifecycle Events --- END ---
 
             Ok::<(), Error>(())
         }
     });
 
-    Extension::new()
-        .with_events(&["INVOKE", "SHUTDOWN"])
-        .with_events_processor(events_processor)
-        .with_telemetry_processor(SharedService::new(service_fn(telemetry_handler_fn)))
-        .with_telemetry_types(&["platform"])
-        .with_telemetry_buffering(LogBuffering {
-            timeout_ms: config.buffer_timeout_ms as usize,
-            max_bytes: config.buffer_max_bytes,
-            max_items: config.buffer_max_items,
-        })
-        .run()
-        .await?;
-
-    Ok(())
+    // Build and run the extension with appropriate configuration
+    if config.enable_platform_telemetry {
+        tracing::debug!("Platform telemetry processing enabled");
+        Extension::new()
+            .with_events(&["INVOKE", "SHUTDOWN"])
+            .with_events_processor(events_processor)
+            .with_telemetry_processor(SharedService::new(service_fn(telemetry_handler_fn)))
+            .with_telemetry_types(&["platform"])
+            .with_telemetry_buffering(LogBuffering {
+                timeout_ms: config.buffer_timeout_ms as usize,
+                max_bytes: config.buffer_max_bytes,
+                max_items: config.buffer_max_items,
+            })
+            .run()
+            .await
+    } else {
+        tracing::debug!("Platform telemetry processing disabled");
+        Extension::new()
+            .with_events(&["INVOKE", "SHUTDOWN"])
+            .with_events_processor(events_processor)
+            .run()
+            .await
+    }
 }

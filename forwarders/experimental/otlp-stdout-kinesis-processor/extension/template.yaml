@@ -37,13 +37,13 @@ Resources:
       CodeUri: example/
       Handler: app.handler
       Runtime: python3.13
-      Tracing: Active
+      Tracing: Disabled
       Architectures:
         - arm64
       LoggingConfig:
         LogFormat: JSON
-        ApplicationLogLevel: DEBUG
-        SystemLogLevel: DEBUG
+        ApplicationLogLevel: INFO
+        SystemLogLevel: INFO
       FunctionUrlConfig:
         AuthType: NONE
       Layers:
@@ -51,7 +51,8 @@ Resources:
       Environment:
         Variables:
           OTLP_STDOUT_SPAN_EXPORTER_OUTPUT_TYPE: pipe
-          # OTLP_STDOUT_KINESIS_STREAM_NAME: !ImportValue otlp-stdout-kinesis-processor:otlp-stream-name
+          OTEL_LITE_EXTENSION_ENABLE_PLATFORM_TELEMETRY: true
+          # OTEL_LITE_EXTENSION_STREAM_NAME: !ImportValue otlp-stdout-kinesis-processor:otlp-stream-name
       Policies:
         - KinesisCrudPolicy:
             StreamName: !ImportValue otlp-stdout-kinesis-processor:otlp-stream-name
