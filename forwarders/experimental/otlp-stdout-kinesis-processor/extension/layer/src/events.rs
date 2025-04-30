@@ -1,4 +1,3 @@
-use crate::xray::ParsedXrayTraceContext;
 use chrono::{DateTime, Utc};
 use lambda_extension::{Span as LambdaSpan, Status as LambdaStatus};
 use opentelemetry::Value as OtelValue;
@@ -11,21 +10,18 @@ pub enum PlatformEventData {
     // --- Invoke Phase ---
     Start {
         version: Option<String>,
-        trace_context: Option<ParsedXrayTraceContext>,
     },
     RuntimeDone {
         status: LambdaStatus,
         error_type: Option<String>,
         metrics: HashMap<String, OtelValue>,
         spans: Vec<TelemetrySpan>,
-        trace_context: Option<ParsedXrayTraceContext>,
     },
     Report {
         status: LambdaStatus,
         error_type: Option<String>,
         metrics: HashMap<String, OtelValue>,
         spans: Vec<TelemetrySpan>,
-        trace_context: Option<ParsedXrayTraceContext>,
     },
 }
 

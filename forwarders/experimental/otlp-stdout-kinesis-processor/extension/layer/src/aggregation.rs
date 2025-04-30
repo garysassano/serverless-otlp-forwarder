@@ -8,9 +8,6 @@ use opentelemetry::{
 use opentelemetry_sdk::trace::{SpanData, SpanEvents, SpanLinks};
 use rand::Rng;
 use std::time::{Duration as StdDuration, SystemTime};
-use std::collections::HashMap;
-use opentelemetry::Value as OtelValue;
-use std::borrow::Cow;
 
 #[derive(Debug)]
 pub struct SpanAggregator {
@@ -56,6 +53,27 @@ impl SpanAggregator {
         }
     }
 
+    /// Sets the trace context information for this aggregator from the execution_trace_map.
+    /// This method will only set the fields if they have not been set yet (are None).
+    pub fn set_trace_context(&mut self, trace_id: TraceId, parent_span_id: SpanId) {
+        // Only set trace_id if it's not already set
+        if self.trace_id.is_none() {
+            tracing::debug!(%trace_id, %parent_span_id, "Setting trace context for request_id: {}", self.request_id);
+            
+            self.trace_id = Some(trace_id);
+            self.parent_id = Some(parent_span_id);
+            
+            // If no span_id has been assigned yet, generate a new random one
+            if self.span_id.is_none() {
+                let mut rng = rand::rng();
+                self.span_id = Some(SpanId::from_bytes(rng.random::<[u8; 8]>()));
+            }
+            
+            // Mark as sampled since we have trace information
+            self.trace_flags = TraceFlags::SAMPLED;
+        }
+    }
+
     /// Updates the aggregator state based on a received platform event.
     pub fn update_from_event(&mut self, event: &ParsedPlatformEvent) {
         self.last_updated_timestamp = event.timestamp;
@@ -69,7 +87,7 @@ impl SpanAggregator {
         match &event.data {
             PlatformEventData::Start {
                 version,
-                trace_context,
+                ..  // Remove trace_context from pattern
             } => {
                 if self.start_time.is_none() {
                     self.start_time = Some(event.timestamp.into());
@@ -78,27 +96,14 @@ impl SpanAggregator {
                     self.attributes
                         .push(KeyValue::new("faas.instance", v.clone()));
                 }
-                if self.trace_id.is_none() {
-                    if let Some(tc) = trace_context {
-                        self.trace_id = Some(tc.trace_id);
-                        self.parent_id = tc.parent_id;
-                        self.trace_flags = if tc.sampled {
-                            TraceFlags::SAMPLED
-                        } else {
-                            TraceFlags::NOT_SAMPLED
-                        };
-                        if self.span_id.is_none() {
-                            self.span_id = tc.platform_span_id;
-                        }
-                    }
-                }
+                // Remove trace_context handling - that's now done via set_trace_context
             }
             PlatformEventData::RuntimeDone {
                 status,
                 error_type,
                 metrics,
                 spans,
-                trace_context,
+                ..  // Remove trace_context from pattern
             } => {
                 if self.status == OtelStatus::Unset {
                     self.set_otel_status(status.clone(), error_type.as_deref());
@@ -108,28 +113,14 @@ impl SpanAggregator {
                         .push(KeyValue::new(format!("lambda.runtime.{}", k), v.clone()));
                 }
                 self.add_child_spans(spans);
-
-                if self.trace_id.is_none() {
-                    if let Some(tc) = trace_context {
-                        self.trace_id = Some(tc.trace_id);
-                        self.parent_id = tc.parent_id;
-                        self.trace_flags = if tc.sampled {
-                            TraceFlags::SAMPLED
-                        } else {
-                            TraceFlags::NOT_SAMPLED
-                        };
-                        if self.span_id.is_none() {
-                            self.span_id = tc.platform_span_id;
-                        }
-                    }
-                }
+                // Remove trace_context handling - that's now done via set_trace_context
             }
             PlatformEventData::Report {
                 status,
                 error_type,
                 metrics,
                 spans,
-                trace_context,
+                ..  // Remove trace_context from pattern
             } => {
                 self.end_time = Some(event.timestamp.into());
                 self.set_otel_status(status.clone(), error_type.as_deref());
@@ -140,21 +131,7 @@ impl SpanAggregator {
                 self.attributes
                     .push(KeyValue::new("faas.execution", self.request_id.clone()));
                 self.add_child_spans(spans);
-
-                if self.trace_id.is_none() {
-                    if let Some(tc) = trace_context {
-                        self.trace_id = Some(tc.trace_id);
-                        self.parent_id = tc.parent_id;
-                        self.trace_flags = if tc.sampled {
-                            TraceFlags::SAMPLED
-                        } else {
-                            TraceFlags::NOT_SAMPLED
-                        };
-                        if self.span_id.is_none() {
-                            self.span_id = tc.platform_span_id;
-                        }
-                    }
-                }
+                // Remove trace_context handling - that's now done via set_trace_context
             }
         }
     }
@@ -279,10 +256,11 @@ impl SpanAggregator {
 #[cfg(test)]
 mod tests {
     use super::*; // Import items from outer module
-    use crate::xray::ParsedXrayTraceContext;
     use chrono::TimeZone;
     use opentelemetry::trace::TraceFlags;
     use std::collections::HashMap;
+    use std::borrow::Cow;
+    use opentelemetry::Value as OtelValue;
 
     // Helper to create a default timestamp
     fn default_ts() -> DateTime<Utc> {
@@ -320,19 +298,16 @@ mod tests {
 
         let trace_id = TraceId::from_hex("0102030405060708090a0b0c0d0e0f10").unwrap();
         let parent_id = SpanId::from_hex("0102030405060708").unwrap();
-        let platform_span_id = SpanId::from_hex("1011121314151617").unwrap();
 
+        // First, set the trace context directly
+        agg.set_trace_context(trace_id, parent_id);
+        
+        // Then create and apply the start event (without trace context)
         let start_event = ParsedPlatformEvent {
             timestamp,
             request_id,
             data: PlatformEventData::Start {
                 version: Some("1.0".to_string()),
-                trace_context: Some(ParsedXrayTraceContext {
-                    trace_id,
-                    parent_id: Some(parent_id),
-                    sampled: true,
-                    platform_span_id: Some(platform_span_id),
-                }),
             },
         };
 
@@ -342,7 +317,7 @@ mod tests {
         assert_eq!(agg.trace_id, Some(trace_id));
         assert_eq!(agg.parent_id, Some(parent_id));
         assert_eq!(agg.trace_flags, TraceFlags::SAMPLED);
-        assert_eq!(agg.span_id, Some(platform_span_id));
+        assert!(agg.span_id.is_some()); // A span_id should be generated
         assert_eq!(agg.received_event_types, vec!["platform.start"]);
         assert_eq!(agg.last_updated_timestamp, timestamp);
         // Check attribute was added
@@ -370,7 +345,6 @@ mod tests {
                 error_type: None,
                 metrics, // Pass the created metrics map
                 spans: vec![], // No child spans for this test
-                trace_context: None, // Assume trace context came from Start
             },
         };
 
@@ -402,7 +376,6 @@ mod tests {
                 error_type: Some("Error".to_string()),
                 metrics: HashMap::new(),
                 spans: vec![],
-                trace_context: None,
             },
         };
 
@@ -431,7 +404,6 @@ mod tests {
                 error_type: None,
                 metrics: HashMap::new(),
                 spans: vec![],
-                trace_context: None,
             },
         };
         agg.update_from_event(&runtime_done_event);
@@ -451,7 +423,6 @@ mod tests {
                 error_type: Some("ReportError".to_string()),
                 metrics: report_metrics,
                 spans: vec![],
-                trace_context: None,
             },
         };
 
@@ -486,7 +457,11 @@ mod tests {
 
         // Add Start
         let start_event = ParsedPlatformEvent {
-            timestamp, request_id: request_id.clone(), data: PlatformEventData::Start { version: None, trace_context: None }
+            timestamp, 
+            request_id: request_id.clone(), 
+            data: PlatformEventData::Start { 
+                version: None
+            }
         };
         agg.update_from_event(&start_event);
         assert!(!agg.is_complete());
@@ -496,7 +471,10 @@ mod tests {
             timestamp: timestamp + chrono::Duration::milliseconds(100),
             request_id: request_id.clone(),
             data: PlatformEventData::RuntimeDone {
-                status: LambdaStatus::Success, error_type: None, metrics: HashMap::new(), spans: vec![], trace_context: None
+                status: LambdaStatus::Success, 
+                error_type: None, 
+                metrics: HashMap::new(), 
+                spans: vec![]
             }
         };
         agg.update_from_event(&runtime_done_event);
@@ -507,7 +485,10 @@ mod tests {
             timestamp: timestamp + chrono::Duration::milliseconds(200),
             request_id: request_id.clone(),
             data: PlatformEventData::Report {
-                status: LambdaStatus::Success, error_type: None, metrics: HashMap::new(), spans: vec![], trace_context: None
+                status: LambdaStatus::Success, 
+                error_type: None, 
+                metrics: HashMap::new(), 
+                spans: vec![]
             }
         };
         agg.update_from_event(&report_event);
@@ -637,7 +618,6 @@ mod tests {
                 error_type: None,
                 metrics: HashMap::new(),
                 spans: telemetry_spans, // Pass the child spans
-                trace_context: None,
             },
         };
 
