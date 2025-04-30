@@ -7,6 +7,7 @@ use std::collections::HashMap;
 /// We use an enum to clearly distinguish event types and their specific data.
 #[derive(Debug, Clone)]
 pub enum PlatformEventData {
+    InitStart {},
     // --- Invoke Phase ---
     Start {
         version: Option<String>,

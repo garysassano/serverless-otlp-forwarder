@@ -5,7 +5,6 @@ use uuid::Uuid;
 
 // Kinesis limit for a single record
 pub const MAX_RECORD_SIZE_BYTES: usize = 1_048_576; // 1MB per record
-pub const RECORD_PREFIX: &str = r#"{"__otel_otlp_stdout":"#;
 
 #[derive(Default)]
 pub struct KinesisBatch {

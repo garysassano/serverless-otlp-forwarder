@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use opentelemetry::trace::TraceId;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 // Import for pipe reading
 use tokio::fs::File;
@@ -55,6 +55,7 @@ struct AppState {
     internal_exporter_buffer: Arc<BufferOutput>,
     processor_input_rx: Mutex<mpsc::Receiver<ProcessorInput>>,
     execution_trace_map: Mutex<HashMap<String, (TraceId, SpanId, Instant)>>,
+    init_start_time: Mutex<Option<SystemTime>>,
 }
 impl AppState {
     async fn flush_batch(&self) -> Result<(), Error> {
@@ -126,6 +127,23 @@ async fn telemetry_handler(
         let timestamp = event.time;
         tracing::warn!("Received event: {:?}", event);
         let parsed_event_opt = match event.record {
+            // --- Add Case for PlatformInitStart --- START ---
+            LambdaTelemetryRecord::PlatformInitStart {
+                initialization_type:_, // Ignore initialization_type for now
+                phase:_, // Ignore phase for now
+                .. // Ignore other fields like runtime_version for now
+            } => {
+                // TODO removed - InitStart variant needs no fields currently
+                Some(ParsedPlatformEvent {
+                    timestamp,
+                    // PlatformInitStart doesn't have a request_id, use an empty string for now.
+                    request_id: "".to_string(), 
+                    data: PlatformEventData::InitStart { 
+                        // No fields needed
+                     },
+                })
+            }
+            // --- Add Case for PlatformInitStart --- END ---
             LambdaTelemetryRecord::PlatformStart {
                 request_id,
                 version,
@@ -185,7 +203,10 @@ async fn telemetry_handler(
                 spans,
                 tracing: _, // Ignore tracing field
             } => {
-                // No need to parse X-Ray header since we'll correlate via the execution_trace_map
+                // Check for init duration metric BEFORE creating the ParsedPlatformEvent
+                let init_duration_ms_opt = metrics.init_duration_ms;
+
+                // Create the normal ParsedPlatformEvent
                 let telemetry_spans = spans.into_iter().map(TelemetrySpan::from).collect();
                 let mut attributes = HashMap::new();
                 attributes.insert(
@@ -211,22 +232,33 @@ async fn telemetry_handler(
                     attributes.insert("report.restoreDurationMs".to_string(), OtelValue::F64(rd));
                 }
 
-                Some(ParsedPlatformEvent {
+                let parsed_event = ParsedPlatformEvent {
                     timestamp,
-                    request_id,
+                    request_id: request_id.clone(), // Clone request_id here
                     data: PlatformEventData::Report {
                         status,
                         error_type,
                         metrics: attributes,
                         spans: telemetry_spans,
-                        // trace_context field removed
                     },
-                })
+                };
+                
+                // Send the InitDataAvailable message IF init duration was present
+                if let Some(init_duration_ms) = init_duration_ms_opt {
+                     tracing::debug!(request_id = %request_id, init_duration_ms, "Found init duration in report, sending InitDataAvailable message");
+                     if let Err(e) = tx.send(ProcessorInput::InitDataAvailable { request_id: request_id.clone(), init_duration_ms }).await {
+                         tracing::error!("Failed to send InitDataAvailable to processor channel: {}", e);
+                     }
+                 }
+
+                // Return the normal parsed event to be sent as PlatformTelemetry
+                Some(parsed_event)
             }
             // Ignore all init phase and other events
             _ => None,
         };
 
+        // Send the PlatformTelemetry message (if any was created)
         if let Some(parsed_event) = parsed_event_opt {
             if let Err(e) = tx.send(ProcessorInput::PlatformTelemetry(parsed_event)).await {
                 tracing::error!("Failed to send platform event to processor channel: {}", e);
@@ -281,6 +313,7 @@ async fn main() -> Result<(), Error> {
 
     let aggregations = Mutex::new(HashMap::<String, SpanAggregator>::new());
     let execution_trace_map = Mutex::new(HashMap::<String, (TraceId, SpanId, Instant)>::new());
+    let init_start_time = Mutex::new(None::<SystemTime>);
 
     let app_state = Arc::new(AppState {
         kinesis_client,
@@ -291,6 +324,7 @@ async fn main() -> Result<(), Error> {
         internal_exporter_buffer: internal_exporter_buffer.clone(),
         processor_input_rx: Mutex::new(telemetry_rx),
         execution_trace_map,
+        init_start_time,
     });
 
     let telemetry_tx_clone = telemetry_tx.clone();
@@ -391,6 +425,18 @@ async fn main() -> Result<(), Error> {
                         match receiver_guard.try_recv() {
                             Ok(ProcessorInput::PlatformTelemetry(parsed_event)) => {
                                 drop(receiver_guard); // Drop lock ASAP
+                                
+                                // --- Handle InitStart Event --- START ---
+                                if let PlatformEventData::InitStart { .. } = parsed_event.data {
+                                    tracing::debug!("Received InitStart platform event, storing start time.");
+                                    let mut init_start_opt = state.init_start_time.lock().await;
+                                    *init_start_opt = Some(parsed_event.timestamp.into());
+                                    drop(init_start_opt);
+                                    // Don't process InitStart further in aggregation
+                                    continue; 
+                                }
+                                // --- Handle InitStart Event --- END ---
+                                
                                 tracing::debug!(
                                     "Processing platform telemetry for request_id: {}",
                                     parsed_event.request_id
@@ -441,6 +487,7 @@ async fn main() -> Result<(), Error> {
                                 }
                                 drop(aggregations_map); // Drop lock before await
 
+                                // --- Export and Buffer Handling --- START ---
                                 if !completed_spans.is_empty() {
                                     let span_count = completed_spans.len();
                                     tracing::debug!(count = span_count, "Attempting to export completed/aggregated spans via OtlpStdoutSpanExporter");
@@ -474,7 +521,28 @@ async fn main() -> Result<(), Error> {
                                     }
                                     // --- Process aggregated spans from the internal exporter's buffer --- END ---
                                 }
+                                // --- Export and Buffer Handling --- END ---
                             }
+                            // --- Add Case for InitDataAvailable --- START ---
+                            Ok(ProcessorInput::InitDataAvailable { request_id, init_duration_ms }) => {
+                                drop(receiver_guard); // Drop lock ASAP
+                                tracing::debug!(request_id = %request_id, init_duration_ms, "Processing InitDataAvailable");
+                                
+                                let init_start_opt = state.init_start_time.lock().await.take();
+                                
+                                if let Some(init_start_time) = init_start_opt {
+                                    let mut aggregations_map = state.aggregations.lock().await;
+                                    if let Some(agg) = aggregations_map.get_mut(&request_id) {
+                                        agg.add_init_phase_span(init_start_time, init_duration_ms);
+                                    } else {
+                                        tracing::warn!(request_id = %request_id, "Aggregator not found when trying to add init phase span. It might have completed or timed out already.");
+                                    }
+                                    drop(aggregations_map);
+                                } else {
+                                    tracing::warn!(request_id = %request_id, "Received InitDataAvailable but init_start_time was None.");
+                                }
+                            }
+                            // --- Add Case for InitDataAvailable --- END ---
                             Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
                                 // No more telemetry to process
                                 drop(receiver_guard);
@@ -588,6 +656,16 @@ async fn main() -> Result<(), Error> {
                         }
                     }
                     // --- Clear Execution Trace Map on Shutdown --- END ---
+
+                    // --- Clear Init Start Time on Shutdown --- START ---
+                    {
+                        let mut init_start_opt = state.init_start_time.lock().await;
+                        if init_start_opt.is_some() {
+                            tracing::debug!("Clearing potentially stale init_start_time on shutdown.");
+                           *init_start_opt = None;
+                        }
+                    }
+                    // --- Clear Init Start Time on Shutdown --- END ---
 
                     // Final Kinesis Flush (already implemented)
                     if let Err(e) = state.flush_batch().await {
