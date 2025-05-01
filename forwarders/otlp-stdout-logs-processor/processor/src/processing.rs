@@ -228,7 +228,7 @@ pub async fn process_telemetry_batch(
                         let last_error = results
                             .into_iter()
                             .filter_map(|r| r.err())
-                            .last()
+                            .next_back()
                             .map(|e| format!("Last error: {}", e))
                             .unwrap_or_else(|| "No error details".to_string());
 

@@ -17,7 +17,6 @@ use anyhow::Result;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_lambda_events::event::cloudwatch_logs::LogEntry;
 use otlp_sigv4_client::SigV4ClientBuilder;
-use otlp_stdout_span_exporter::ExporterOutput;
 use otlp_stdout_logs_processor::{
     app_state::AppState,
     collectors::Collectors,
@@ -26,6 +25,7 @@ use otlp_stdout_logs_processor::{
     telemetry::TelemetryData,
     wrappers::LogsEventWrapper,
 };
+use otlp_stdout_span_exporter::ExporterOutput;
 
 use lambda_otel_lite::{init_telemetry, OtelTracingLayer, TelemetryConfig};
 

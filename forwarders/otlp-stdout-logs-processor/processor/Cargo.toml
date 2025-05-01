@@ -23,21 +23,19 @@ opentelemetry_sdk.workspace = true
 otlp-stdout-span-exporter.workspace = true
 
 opentelemetry-otlp.workspace = true
-aws-sdk-secretsmanager = { version = "1.48.0", features = ["behavior-version-latest"] }
-aws-credential-types = "1.1.4"
-url = "2.5.3"
-base64 = "0.22.1"
-flate2 = "1.0"
-aws_lambda_events = { version = "0.16.0", features = ["cloudwatch_logs", "kinesis"], default-features = false }
-regex = "1.11.1"
-opentelemetry-proto = "0.28.0"
-prost = "0.13.5"
+aws-sdk-secretsmanager = { workspace = true, features = ["behavior-version-latest"] }
+aws-credential-types = { workspace = true }
+url = { workspace = true }
+base64 = { workspace = true }
+flate2 = { workspace = true }
+aws_lambda_events = { workspace = true, features = ["cloudwatch_logs", "kinesis"] }
+regex = { workspace = true }
+opentelemetry-proto  = { workspace = true }
+prost = { workspace = true }
 
 [dev-dependencies]
-wiremock = "0.6"
-mockito = "1.2"
-chrono = "0.4.39"
-tokio = { version = "1.0", features = ["full"] }
+wiremock = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
 
 [[bin]]
 name = "logs_processor"
