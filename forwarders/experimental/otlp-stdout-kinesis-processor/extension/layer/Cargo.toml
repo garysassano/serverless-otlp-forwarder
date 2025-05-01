@@ -19,8 +19,8 @@ serde_json.workspace = true
 # Added for platform event conversion and OTLP span export
 otlp-stdout-span-exporter.workspace = true
 opentelemetry.workspace = true
-hex = "0.4"
-chrono = "0.4"
+hex.workspace = true
+chrono.workspace = true
 opentelemetry_sdk = { workspace = true, features = ["trace", "rt-tokio"] }
 opentelemetry-proto = { workspace = true, features = ["trace"] }
 opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_experimental"] }
@@ -30,7 +30,5 @@ nix = { workspace = true, features = ["fs"] }
 base64.workspace = true
 flate2 = { workspace = true } 
 serde = { workspace = true }
-
-# Additions for OTLP parsing and correlation
-anyhow = "1.0"
-prost = "0.13" # For protobuf decoding
+anyhow.workspace = true
+prost.workspace = true

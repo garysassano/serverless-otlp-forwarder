@@ -11,13 +11,13 @@ use std::time::{Duration as StdDuration, SystemTime};
 use std::borrow::Cow;
 
 // Define constants for synthesized span names
-const INIT_PHASE_NAME: &str = "Init Phase";
-const LAMBDA_INVOKE_NAME: &str = "Lambda Invoke";
+const INIT_PHASE_NAME: &str = "Lambda/Init";
+const LAMBDA_INVOKE_NAME: &str = "Lambda/Invoke";
 // Define constants for platform span names we want to map
-const RESPONSE_LATENCY_NAME: &str = "Response Latency";
-const RESPONSE_DURATION_NAME: &str = "Response Duration";
-const EXTENSION_OVERHEAD_NAME: &str = "Extension Overhead";
-const RUNTIME_OVERHEAD_NAME: &str = "Runtime Overhead";
+const RESPONSE_LATENCY_NAME: &str = "Response/Latency";
+const RESPONSE_DURATION_NAME: &str = "Response/Duration";
+const EXTENSION_OVERHEAD_NAME: &str = "Overhead/Extension";
+const RUNTIME_OVERHEAD_NAME: &str = "Overhead/Runtime";
 
 
 #[derive(Debug)]

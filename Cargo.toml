@@ -55,17 +55,17 @@ log = "0.4"
 reqwest-tracing = { version = "0.5.7", features = ["opentelemetry_0_29"] }
 
 # AWS related
-aws-config = { version = "1", features = ["behavior-version-latest"] }
-aws-sdk-sts = { version = "1", features = ["behavior-version-latest"] }
-aws-smithy-runtime-api = { version = "1", features = ["http-1x"] }
-aws-credential-types = "1"
-aws-sdk-secretsmanager = { version = "1", features = ["behavior-version-latest"] }
-aws-sigv4 = "1"
-aws-sdk-lambda = "1"
-aws-sdk-cloudformation = "1"
-aws-sdk-dynamodb = "1"
-aws-sdk-kinesis = { version = "1", default-features = false, features = ["rt-tokio"] }
-aws-sdk-cloudwatchlogs = { version = "1", features = ["behavior-version-latest"] }
+aws-config = { version = "1.6.2", features = ["behavior-version-latest"] }
+aws-sdk-sts = { version = "1.66.0", features = ["behavior-version-latest"] }
+aws-smithy-runtime-api = { version = "1.8.0", features = ["http-1x"] }
+aws-credential-types = "1.2.3"
+aws-sdk-secretsmanager = { version = "1.69.0", features = ["behavior-version-latest"] }
+aws-sigv4 = "1.3.1"
+aws-sdk-lambda = "1.76.0"
+aws-sdk-cloudformation = "1.72.0"
+aws-sdk-dynamodb = "1.72.1"
+aws-sdk-kinesis = { version = "1.68.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-cloudwatchlogs = { version = "1.78.0", features = ["behavior-version-latest"] }
 lambda_runtime = { version = "0.13.0", features = ["anyhow", "tracing", "opentelemetry"] }
 lambda-extension = "0.11.0"
 aws_lambda_events = { version = "0.16.0", default-features = false, features = ["apigw", "alb", "sqs"] }
@@ -91,7 +91,7 @@ anyhow = "1.0"
 # Utilities and helpers
 base64 = "0.22.1"
 flate2 = "1.0"
-regex = "1.11"
+regex = "1.11.1"
 pin-project = "1.1"
 bytes = "1.7"
 chrono = "0.4"
@@ -105,8 +105,8 @@ tera = "1.20.0"
 statrs = "0.18.0"
 clap = { version = "4.4.8", features = ["derive"] }
 indicatif = { version = "0.17", features = ["improved_unicode"] }
-headless_chrome = "1.0.9"
-toml = "0.8.20"
+headless_chrome = "1.0.17"
+toml = "0.8.22"
 globset = "0.4"
 once_cell = "1.21.3"
 indexmap = "2.9.0"
@@ -131,7 +131,7 @@ hex = "0.4"
 prettytable-rs = "0.10"
 comfy-table = "7.1.4"
 tabled = "0.19.0"
-nix = "0.29.0"
+nix = "0.30.0"
 scopeguard = "1.2"
 tempfile = "3.8"
 terminal_size = "0.4.2"
@@ -141,3 +141,6 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"
+
+[patch.crates-io]
+tracing-opentelemetry = { git = "https://github.com/dev7a/tracing-opentelemetry", rev="55880e7de9e4b9098cf83d461af59070f0287869" }

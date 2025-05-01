@@ -125,7 +125,7 @@ async fn telemetry_handler(
 ) -> Result<(), Error> {
     for event in events {
         let timestamp = event.time;
-        tracing::warn!("Received event: {:?}", event);
+        tracing::debug!("Received event: {:?}", event);
         let parsed_event_opt = match event.record {
             // --- Add Case for PlatformInitStart --- START ---
             LambdaTelemetryRecord::PlatformInitStart {
@@ -500,23 +500,29 @@ async fn main() -> Result<(), Error> {
                                     }
 
                                     // --- Process aggregated spans from the internal exporter's buffer --- START ---
-                                    let aggregated_lines = state.internal_exporter_buffer.take_lines(); // Get lines & clear buffer
-                                    if !aggregated_lines.is_empty() {
-                                        tracing::debug!("Processing {} line(s) from internal exporter buffer", aggregated_lines.len());
-                                        if state.stream_name.is_some() {
-                                            // Add to Kinesis batch if Kinesis is enabled
-                                            let mut kinesis_batch = state.batch.lock().await;
-                                            for line in aggregated_lines {
-                                                if let Err(e) = kinesis_batch.add_record(line) {
-                                                    tracing::error!(error = %e, "Failed to add aggregated span record to Kinesis batch");
+                                    match state.internal_exporter_buffer.take_lines() { // Get lines & clear buffer
+                                        Ok(aggregated_lines) => { // Successfully got the lines
+                                            if !aggregated_lines.is_empty() {
+                                                tracing::debug!("Processing {} line(s) from internal exporter buffer", aggregated_lines.len());
+                                                if state.stream_name.is_some() {
+                                                    // Add to Kinesis batch if Kinesis is enabled
+                                                    let mut kinesis_batch = state.batch.lock().await;
+                                                    for line in aggregated_lines { // Iterate over the Vec<String>
+                                                        if let Err(e) = kinesis_batch.add_record(line) {
+                                                            tracing::error!(error = %e, "Failed to add aggregated span record to Kinesis batch");
+                                                        }
+                                                    }
+                                                    drop(kinesis_batch);
+                                                } else {
+                                                    // Otherwise, print to stdout (CloudWatch Logs)
+                                                    for line in aggregated_lines { // Iterate over the Vec<String>
+                                                        println!("{}", line);
+                                                    }
                                                 }
                                             }
-                                            drop(kinesis_batch);
-                                        } else {
-                                            // Otherwise, print to stdout (CloudWatch Logs)
-                                            for line in aggregated_lines {
-                                                println!("{}", line);
-                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("Failed to take lines from internal exporter buffer: {:?}", e);
                                         }
                                     }
                                     // --- Process aggregated spans from the internal exporter's buffer --- END ---

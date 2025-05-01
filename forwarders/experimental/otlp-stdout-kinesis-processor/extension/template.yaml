@@ -42,8 +42,8 @@ Resources:
         - arm64
       LoggingConfig:
         LogFormat: JSON
-        ApplicationLogLevel: DEBUG
-        SystemLogLevel: INFO
+        ApplicationLogLevel: INFO
+        SystemLogLevel: WARN
       FunctionUrlConfig:
         AuthType: NONE
       Layers:
@@ -52,7 +52,7 @@ Resources:
         Variables:
           OTLP_STDOUT_SPAN_EXPORTER_OUTPUT_TYPE: pipe
           OTEL_LITE_EXTENSION_ENABLE_PLATFORM_TELEMETRY: true
-          # OTEL_LITE_EXTENSION_STREAM_NAME: !ImportValue otlp-stdout-kinesis-processor:otlp-stream-name
+          OTEL_LITE_EXTENSION_STREAM_NAME: !ImportValue otlp-stdout-kinesis-processor:otlp-stream-name
       Policies:
         - KinesisCrudPolicy:
             StreamName: !ImportValue otlp-stdout-kinesis-processor:otlp-stream-name
