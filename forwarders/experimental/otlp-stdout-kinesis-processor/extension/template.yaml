@@ -42,7 +42,7 @@ Resources:
         - arm64
       LoggingConfig:
         LogFormat: JSON
-        ApplicationLogLevel: INFO
+        ApplicationLogLevel: DEBUG
         SystemLogLevel: INFO
       FunctionUrlConfig:
         AuthType: NONE

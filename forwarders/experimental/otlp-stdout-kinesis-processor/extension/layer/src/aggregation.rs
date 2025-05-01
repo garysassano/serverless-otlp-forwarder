@@ -8,6 +8,17 @@ use opentelemetry::{
 use opentelemetry_sdk::trace::{SpanData, SpanEvents, SpanLinks};
 use rand::Rng;
 use std::time::{Duration as StdDuration, SystemTime};
+use std::borrow::Cow;
+
+// Define constants for synthesized span names
+const INIT_PHASE_NAME: &str = "Init Phase";
+const LAMBDA_INVOKE_NAME: &str = "Lambda Invoke";
+// Define constants for platform span names we want to map
+const RESPONSE_LATENCY_NAME: &str = "Response Latency";
+const RESPONSE_DURATION_NAME: &str = "Response Duration";
+const EXTENSION_OVERHEAD_NAME: &str = "Extension Overhead";
+const RUNTIME_OVERHEAD_NAME: &str = "Runtime Overhead";
+
 
 #[derive(Debug)]
 pub struct SpanAggregator {
@@ -15,7 +26,7 @@ pub struct SpanAggregator {
 
     pub trace_id: Option<TraceId>,
     pub span_id: Option<SpanId>,
-    pub parent_id: Option<SpanId>,
+    pub function_root_span_id: Option<SpanId>,
     pub trace_flags: TraceFlags,
 
     pub start_time: Option<SystemTime>,
@@ -38,12 +49,12 @@ impl SpanAggregator {
             request_id,
             trace_id: None,
             span_id: None,
-            parent_id: None,
+            function_root_span_id: None,
             trace_flags: TraceFlags::NOT_SAMPLED,
             start_time: None,
             end_time: None,
             status: OtelStatus::Unset,
-            name: "Lambda Invoke".to_string(),
+            name: LAMBDA_INVOKE_NAME.to_string(),
             kind: SpanKind::Server,
             attributes: Vec::new(),
             child_spans_data: Vec::new(),
@@ -55,18 +66,19 @@ impl SpanAggregator {
 
     /// Sets the trace context information for this aggregator from the execution_trace_map.
     /// This method will only set the fields if they have not been set yet (are None).
-    pub fn set_trace_context(&mut self, trace_id: TraceId, parent_span_id: SpanId) {
+    pub fn set_trace_context(&mut self, trace_id: TraceId, root_span_id: SpanId) {
         // Only set trace_id if it's not already set
         if self.trace_id.is_none() {
-            tracing::debug!(%trace_id, %parent_span_id, "Setting trace context for request_id: {}", self.request_id);
+            tracing::debug!(%trace_id, %root_span_id, "Setting trace context for request_id: {}", self.request_id);
             
             self.trace_id = Some(trace_id);
-            self.parent_id = Some(parent_span_id);
+            self.function_root_span_id = Some(root_span_id);
             
-            // If no span_id has been assigned yet, generate a new random one
+            // Generate and store the span_id for *this* aggregator's span ("Lambda Invoke")
             if self.span_id.is_none() {
                 let mut rng = rand::rng();
                 self.span_id = Some(SpanId::from_bytes(rng.random::<[u8; 8]>()));
+                tracing::debug!(generated_span_id = ?self.span_id, "Generated span_id for Lambda Invoke span");
             }
             
             // Mark as sampled since we have trace information
@@ -163,7 +175,7 @@ impl SpanAggregator {
 
         Some(SpanData {
             span_context,
-            parent_span_id: self.parent_id.unwrap_or_else(|| SpanId::from_bytes([0; 8])),
+            parent_span_id: self.function_root_span_id.unwrap_or_else(|| SpanId::from_bytes([0; 8])),
             span_kind: self.kind.clone(),
             name: self.name.clone().into(),
             start_time,
@@ -207,13 +219,14 @@ impl SpanAggregator {
             }
         };
 
-        // Check for parent_span_id (this aggregate span's ID)
+        // Check for parent_span_id (this aggregate span's ID, i.e., "Lambda Invoke")
         let parent_span_id = match self.span_id {
             Some(id) => id,
             None => {
-                // This case should be less likely as we generate span_id in `new`
+                // This case should be less likely as set_trace_context generates span_id
                 tracing::error!(
-                    "Cannot create child spans without a parent span ID for aggregate span."
+                    request_id=%self.request_id, 
+                    "Cannot create platform child spans: parent span_id (Lambda Invoke ID) is missing."
                 );
                 return;
             }
@@ -239,7 +252,7 @@ impl SpanAggregator {
                 span_context: child_span_context,
                 parent_span_id,
                 span_kind: SpanKind::Internal,
-                name: span.name.clone().into(),
+                name: Self::map_platform_span_name(span.name.as_str()),
                 start_time: child_start_time,
                 end_time: child_end_time,
                 attributes: vec![],
@@ -264,11 +277,11 @@ impl SpanAggregator {
             tracing::warn!(request_id=%self.request_id, "Cannot add init phase span: trace_id is missing.");
             return;
         };
-        let parent_span_id = if let Some(id) = self.span_id {
+        let parent_span_id = if let Some(id) = self.function_root_span_id {
             id
         } else {
-            // self.span_id should be generated by set_trace_context
-             tracing::warn!(request_id=%self.request_id, "Cannot add init phase span: parent span_id (aggregator's span_id) is missing.");
+            // Should only happen if OTLP data wasn't parsed before report w/ initDuration
+            tracing::warn!(request_id=%self.request_id, "Cannot add init phase span: function root span_id is missing.");
             return;
         };
 
@@ -292,9 +305,9 @@ impl SpanAggregator {
 
         let init_span_data = SpanData {
             span_context: init_span_context,
-            parent_span_id, // Parent is the main "Lambda Invoke" span
+            parent_span_id, // Parent is the actual function's root span
             span_kind: SpanKind::Internal,
-            name: "Init Phase".into(),
+            name: INIT_PHASE_NAME.into(),
             start_time,
             end_time,
             attributes: vec![], // TODO: Could add lambda.init_type attribute later
@@ -306,6 +319,19 @@ impl SpanAggregator {
         };
 
         self.child_spans_data.push(init_span_data);
+    }
+
+    /// Maps known platform span names to standardized constant names.
+    /// Returns the original name if no mapping exists.
+    fn map_platform_span_name(original_name: &str) -> Cow<'static, str> {
+        match original_name {
+            "responseLatency" => Cow::Borrowed(RESPONSE_LATENCY_NAME),
+            "responseDuration" => Cow::Borrowed(RESPONSE_DURATION_NAME),
+            "extensionOverhead" => Cow::Borrowed(EXTENSION_OVERHEAD_NAME),
+            "runtimeOverhead" => Cow::Borrowed(RUNTIME_OVERHEAD_NAME),
+            // Add other mappings here if needed
+            _ => Cow::Owned(original_name.to_string()), // Fallback to original name (owned copy)
+        }
     }
 }
 
@@ -332,7 +358,7 @@ mod tests {
         assert_eq!(agg.request_id, request_id);
         assert!(agg.trace_id.is_none());
         assert!(agg.span_id.is_none());
-        assert!(agg.parent_id.is_none());
+        assert!(agg.function_root_span_id.is_none());
         assert_eq!(agg.trace_flags, TraceFlags::NOT_SAMPLED);
         assert!(agg.start_time.is_none());
         assert!(agg.end_time.is_none());
@@ -353,10 +379,10 @@ mod tests {
         let mut agg = SpanAggregator::new(request_id.clone(), timestamp);
 
         let trace_id = TraceId::from_hex("0102030405060708090a0b0c0d0e0f10").unwrap();
-        let parent_id = SpanId::from_hex("0102030405060708").unwrap();
+        let root_span_id = SpanId::from_hex("0102030405060708").unwrap();
 
         // First, set the trace context directly
-        agg.set_trace_context(trace_id, parent_id);
+        agg.set_trace_context(trace_id, root_span_id);
         
         // Then create and apply the start event (without trace context)
         let start_event = ParsedPlatformEvent {
@@ -371,7 +397,7 @@ mod tests {
 
         assert_eq!(agg.start_time, Some(timestamp.into()));
         assert_eq!(agg.trace_id, Some(trace_id));
-        assert_eq!(agg.parent_id, Some(parent_id));
+        assert_eq!(agg.function_root_span_id, Some(root_span_id));
         assert_eq!(agg.trace_flags, TraceFlags::SAMPLED);
         assert!(agg.span_id.is_some()); // A span_id should be generated
         assert_eq!(agg.received_event_types, vec!["platform.start"]);
@@ -581,14 +607,14 @@ mod tests {
 
         let trace_id = TraceId::from_hex("0102030405060708090a0b0c0d0e0f11").unwrap();
         let span_id = SpanId::from_hex("1112131415161718").unwrap();
-        let parent_id = SpanId::from_hex("2122232425262728").unwrap();
+        let root_span_id = SpanId::from_hex("2122232425262728").unwrap();
         let start_system_time: SystemTime = timestamp.into();
         let end_system_time: SystemTime = (timestamp + chrono::Duration::milliseconds(100)).into();
 
         // Set required fields
         agg.trace_id = Some(trace_id);
         agg.span_id = Some(span_id);
-        agg.parent_id = Some(parent_id);
+        agg.function_root_span_id = Some(root_span_id);
         agg.start_time = Some(start_system_time);
         agg.end_time = Some(end_system_time);
         agg.trace_flags = TraceFlags::SAMPLED;
@@ -603,7 +629,7 @@ mod tests {
         assert_eq!(span_data.span_context.trace_id(), trace_id);
         assert_eq!(span_data.span_context.span_id(), span_id);
         assert_eq!(span_data.span_context.trace_flags(), TraceFlags::SAMPLED);
-        assert_eq!(span_data.parent_span_id, parent_id);
+        assert_eq!(span_data.parent_span_id, root_span_id);
         assert_eq!(span_data.name.as_ref(), "Lambda Invoke"); // Compare Cow as &str
         assert_eq!(span_data.start_time, start_system_time);
         assert_eq!(span_data.end_time, end_system_time);
@@ -642,9 +668,9 @@ mod tests {
 
         // Set trace_id and span_id for the parent (aggregator)
         let trace_id = TraceId::from_hex("0102030405060708090a0b0c0d0e0f12").unwrap();
-        let parent_span_id = SpanId::from_hex("1112131415161719").unwrap();
+        let root_span_id = SpanId::from_hex("1112131415161719").unwrap();
         agg.trace_id = Some(trace_id);
-        agg.span_id = Some(parent_span_id);
+        agg.span_id = Some(root_span_id);
 
         // Create TelemetrySpans to add
         let child_start1_dt = timestamp + chrono::Duration::milliseconds(50);
@@ -685,9 +711,9 @@ mod tests {
         // Check first child span
         let child1 = &agg.child_spans_data[0];
         assert_eq!(child1.span_context.trace_id(), trace_id);
-        assert_ne!(child1.span_context.span_id(), parent_span_id);
+        assert_ne!(child1.span_context.span_id(), root_span_id);
         assert_ne!(child1.span_context.span_id(), SpanId::INVALID);
-        assert_eq!(child1.parent_span_id, parent_span_id);
+        assert_eq!(child1.parent_span_id, root_span_id);
         assert_eq!(child1.name.as_ref(), "child1");
         // Compare SystemTime directly
         assert_eq!(child1.start_time, child_start1_st);
@@ -698,9 +724,9 @@ mod tests {
         // Check second child span
         let child2 = &agg.child_spans_data[1];
         assert_eq!(child2.span_context.trace_id(), trace_id);
-        assert_ne!(child2.span_context.span_id(), parent_span_id);
+        assert_ne!(child2.span_context.span_id(), root_span_id);
         assert_ne!(child2.span_context.span_id(), child1.span_context.span_id());
-        assert_eq!(child2.parent_span_id, parent_span_id);
+        assert_eq!(child2.parent_span_id, root_span_id);
         assert_eq!(child2.name.as_ref(), "child2");
         // Compare SystemTime directly
         assert_eq!(child2.start_time, child_start2_st);
