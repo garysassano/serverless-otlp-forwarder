@@ -318,11 +318,32 @@ class OTLPStdoutSpanExporter(SpanExporter):
         Returns:
             SpanExportResult indicating success or failure
         """
+        # Check for empty batch first to avoid duplicate checks
+        if not spans:
+            # For empty spans with named pipe, perform the "pipe touch" operation
+            if isinstance(self._output, NamedPipeOutput):
+                try:
+                    # Perform the "pipe touch" operation: open for writing and immediately close
+                    with open(self._output.pipe_path, "w"):
+                        pass  # Just need to open and close
+                    return SpanExportResult.SUCCESS
+                except Exception as e:
+                    logger.error(f"Error touching pipe: {e}")
+                    return SpanExportResult.FAILURE
+            # For stdout output with empty spans, return success without writing anything
+            return SpanExportResult.SUCCESS
+
+        # Process non-empty batches
         try:
             # Serialize spans to protobuf format
             serialized_data = encode_spans(spans).SerializeToString()
+
+            # Handle case where serialization returns empty data
             if not serialized_data:
-                return SpanExportResult.FAILURE
+                logger.debug(
+                    "encode_spans resulted in empty data, likely invalid batch."
+                )
+                return SpanExportResult.SUCCESS
 
             # Compress the serialized data using GZIP
             compressed_data = gzip.compress(
