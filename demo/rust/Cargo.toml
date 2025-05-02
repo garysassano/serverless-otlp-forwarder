@@ -10,7 +10,7 @@ rust-version.workspace = true
 tokio.workspace = true
 serde_json.workspace = true
 opentelemetry.workspace = true
-tracing-opentelemetry.workspace = true
+tracing-opentelemetry = { workspace = true }
 lambda_runtime.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
@@ -23,12 +23,12 @@ lambda-otel-lite.workspace = true
 aws-sdk-dynamodb.workspace = true
 chrono.workspace = true
 serde_dynamo.workspace = true
-lazy_static.workspace = true
 sha2.workspace = true
 tera.workspace = true
 reqwest-middleware.workspace = true
 reqwest-tracing.workspace = true
 thiserror.workspace = true
+rand = { workspace = true }
 
 [[bin]]
 name = "frontend"

@@ -107,11 +107,14 @@ def handler(event, context):
     request = event['Records'][0]['cf']['request']
     
     # Add events to the current span
-    current_span.add_event("Processing request", {
-        "method": request['method'],
-        "uri": request['uri'],
-        "origin": request.get('origin', {}).get('custom', {}).get('domainName', 'unknown')
-    })
+    current_span.add_event(
+        name="edge.request",
+        attributes={
+            "event.severity_text": "INFO",
+            "event.severity_number": 9,
+            "event.body": f"received request for {request['uri']}"
+        }
+    )
     
     # Initialize headers if not present
     if 'headers' not in request:
@@ -129,10 +132,16 @@ def handler(event, context):
             'value': value
         }]
     
-    current_span.add_event("Forwarding request", {
-        "tracecontext.injected": "true",
-        "headers.count": str(len(request['headers']))
-    })
+    current_span.add_event(
+        name="edge.forwarding",
+        attributes={
+            "event.severity_text": "INFO",
+            "event.severity_number": 9,
+            "event.body": f"forwarding request to origin for {request['uri']}",
+            "tracecontext.injected": "true",
+            "headers.count": str(len(request['headers']))
+        }
+    )
 
     import json
     print(json.dumps(request))

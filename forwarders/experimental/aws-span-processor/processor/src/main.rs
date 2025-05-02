@@ -19,11 +19,14 @@ use aws_credential_types::provider::ProvideCredentials;
 use aws_lambda_events::event::cloudwatch_logs::LogEntry;
 use lambda_runtime::{tower::ServiceBuilder, Error as LambdaError, LambdaEvent, Runtime};
 use otlp_sigv4_client::SigV4ClientBuilder;
-use serde_json::Value as JsonValue;
 use otlp_stdout_logs_processor::{
-    collectors::Collectors, processing::process_telemetry_batch, telemetry::TelemetryData,
+    collectors::Collectors,
+    processing::process_telemetry_batch,
+    span_compactor::{compact_telemetry_payloads, SpanCompactionConfig},
+    telemetry::TelemetryData,
     AppState, LogsEventWrapper,
 };
+use serde_json::Value as JsonValue;
 use std::sync::Arc;
 
 use lambda_otel_lite::{init_telemetry, OtelTracingLayer, TelemetryConfig};
@@ -81,8 +84,18 @@ async fn function_handler(
 
     // Only process if we have records
     if !telemetry_records.is_empty() {
+        // Compact all telemetry records into a single batch payload
+        let compacted_telemetry =
+            match compact_telemetry_payloads(telemetry_records, &SpanCompactionConfig::default()) {
+                Ok(telemetry) => vec![telemetry],
+                Err(e) => {
+                    tracing::error!("Failed to compact telemetry payloads: {}", e);
+                    return Err(e);
+                }
+            };
+
         process_telemetry_batch(
-            telemetry_records,
+            compacted_telemetry,
             &state.http_client,
             &state.credentials,
             &state.region,

@@ -3,7 +3,7 @@
 use lambda_runtime::Error as LambdaError;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use prost::Message;
-use tracing;
+use tracing::{self, instrument};
 
 use crate::telemetry::TelemetryData;
 
@@ -46,6 +46,7 @@ impl Default for SpanCompactionConfig {
 /// Compacts multiple telemetry payloads into a single payload
 /// Since all log events in a single Lambda invocation come from the same log group,
 /// we can assume they all have the same metadata (source, endpoint, headers)
+#[instrument(skip_all, fields(compact_telemetry_payloads.records.count = batch.len() as i64))]
 pub fn compact_telemetry_payloads(
     batch: Vec<TelemetryData>,
     config: &SpanCompactionConfig,

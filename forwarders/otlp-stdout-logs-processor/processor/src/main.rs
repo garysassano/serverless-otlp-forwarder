@@ -17,6 +17,7 @@ use anyhow::Result;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_lambda_events::event::cloudwatch_logs::LogEntry;
 use otlp_sigv4_client::SigV4ClientBuilder;
+use otlp_stdout_span_exporter::ExporterOutput;
 use otlp_stdout_logs_processor::{
     app_state::AppState,
     collectors::Collectors,
@@ -25,7 +26,6 @@ use otlp_stdout_logs_processor::{
     telemetry::TelemetryData,
     wrappers::LogsEventWrapper,
 };
-use otlp_stdout_span_exporter::ExporterOutput;
 
 use lambda_otel_lite::{init_telemetry, OtelTracingLayer, TelemetryConfig};
 
@@ -131,11 +131,10 @@ async fn main() -> Result<(), LambdaError> {
         .with_service("xray")
         .with_signing_predicate(Box::new(|request| {
             // Only sign requests to AWS endpoints
-            if let Some(host) = request.uri().host() {
-                host.ends_with(".amazonaws.com")
-            } else {
-                false
-            }
+            request
+                .uri()
+                .host()
+                .is_some_and(|host| host.ends_with(".amazonaws.com"))
         }))
         .build()?;
 

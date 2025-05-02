@@ -1,35 +1,27 @@
-AWSTemplateFormatVersion: '2010-09-09'
-Transform: AWS::Serverless-2016-10-31
-
-Description: AWS Lambda function that processes CloudWatch Logs containing spans and forwards them to OpenTelemetry collectors
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: "AWS::Serverless-2016-10-31"
+Description: AWS Lambda function that processes aws/spans CloudWatch Logs
+  and forwards them to OpenTelemetry collectors
 
 Parameters:
-  CollectorsSecretsKeyPrefix:
-    Type: String
-    Default: 'serverless-otlp-forwarder/keys'
-    Description: Prefix for the collectors configuration secrets in AWS Secrets Manager 
-  CollectorsCacheTtlSeconds:
-    Type: Number
-    Description: TTL in seconds for the collectors configuration cache
-    Default: 300
   SpanLogGroupName:
     Type: String
-    Default: 'aws/spans'
+    Default: aws/spans
     Description: Log group name for spans
   VpcId:
     Type: String
     Description: (Optional) VPC ID for VPC deployment
-    Default: ''
+    Default: ""
   SubnetIds:
     Type: CommaDelimitedList
     Description: (Optional) List of subnet IDs for VPC deployment
-    Default: ''
+    Default: ""
 
 Conditions:
-  HasVpcConfig: !Not [!Equals [!Ref VpcId, '']]
+  HasVpcConfig: !Not [!Equals [!Ref VpcId, ""]]
 
 Resources:
-  SpansProcessorFunction:
+  ProcessorFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: rust-cargolambda
@@ -37,79 +29,95 @@ Resources:
         Binary: span_processor
     Properties:
       FunctionName: !Ref AWS::StackName
-      Description: !Sub 'Processes aws/spans from AWS Account ${AWS::AccountId}'
+      Description: !Sub "Processes aws/spans from AWS Account ${AWS::AccountId}"
       CodeUri: processor/
       Handler: bootstrap
       Runtime: provided.al2023
       Architectures:
         - arm64
       Timeout: 60
+      Tracing: Disabled
       LoggingConfig:
         LogFormat: JSON
         ApplicationLogLevel: INFO
         SystemLogLevel: INFO
       Environment:
         Variables:
-          OTEL_EXPORTER_OTLP_ENDPOINT: !Sub '{{resolve:secretsmanager:${CollectorsSecretsKeyPrefix}/default:SecretString:endpoint}}'
-          OTEL_EXPORTER_OTLP_HEADERS: !Sub '{{resolve:secretsmanager:${CollectorsSecretsKeyPrefix}/default:SecretString:auth}}'
-          OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
-          COLLECTORS_CACHE_TTL_SECONDS: !Ref CollectorsCacheTtlSeconds
-          COLLECTORS_SECRETS_KEY_PREFIX: !Sub '${CollectorsSecretsKeyPrefix}/'
           LAMBDA_EXTENSION_SPAN_PROCESSOR_MODE: async
           LAMBDA_TRACING_ENABLE_FMT_LAYER: false
+          OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:4318
+          OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+          OPENTELEMETRY_EXTENSION_LOG_LEVEL: DEBUG
+          OPENTELEMETRY_COLLECTOR_CONFIG_URI: /opt/collector.yaml
       Policies:
-        - Version: '2012-10-17'
+        - Version: "2012-10-17"
           Statement:
             - Effect: Allow
               Action:
-                - 'secretsmanager:BatchGetSecretValue'
-                - 'secretsmanager:ListSecrets'
-                - 'xray:PutTraceSegments'
-                - 'xray:PutSpans'
-                - 'xray:PutSpansForIndexing'
-              Resource: '*'
+                - "secretsmanager:BatchGetSecretValue"
+                - "secretsmanager:ListSecrets"
+                - "xray:PutTraceSegments"
+                - "xray:PutSpans"
+                - "xray:PutSpansForIndexing"
+              Resource: "*"
             - Effect: Allow
               Action:
-                - 'secretsmanager:GetSecretValue'
-              Resource: !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${CollectorsSecretsKeyPrefix}/*'
-      VpcConfig: !If 
+                - "secretsmanager:GetSecretValue"
+              Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:*"
+      Layers:
+        - !Ref CollectorConfig
+        - arn:aws:lambda:us-east-1:961341555982:layer:ocel-arm64-spaneventtolog-0_123_0-local:6
+      VpcConfig: !If
         - HasVpcConfig
-        - SecurityGroupIds: 
-            - !Ref SpanProcessorSecurityGroup
+        - SecurityGroupIds:
+            - !Ref SecurityGroup
           SubnetIds: !Ref SubnetIds
         - !Ref AWS::NoValue
 
-  SpanProcessorSecurityGroup:
+  SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Condition: HasVpcConfig
     Properties:
-      GroupDescription: Security group for OTLP Span Processor Lambda
+      GroupDescription: Security group for aws/spans Processor Lambda
       VpcId: !Ref VpcId
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
 
-  SpanProcessorPermission:
+  ProcessorPermission:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref SpansProcessorFunction
+      FunctionName: !Ref ProcessorFunction
       Action: lambda:InvokeFunction
       Principal: logs.amazonaws.com
-      SourceArn: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${SpanLogGroupName}:*'
+      SourceArn: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${SpanLogGroupName}:*
 
-  SpanProcessorSubscription:
+  ProcessorSubscription:
     Type: AWS::Logs::SubscriptionFilter
+    DependsOn:
+      - ProcessorPermission
     Properties:
       LogGroupName: !Ref SpanLogGroupName
-      FilterPattern: '' # Empty pattern to capture all logs
-      DestinationArn: !GetAtt SpansProcessorFunction.Arn
+      # filter spans that contain a service name and are not in progress
+      # this is to avoid sending spans that are not yet finished
+      FilterPattern: "{ $.resource.attributes.['service.name'] = * &&  $.attributes.['aws.xray.inprogress'] NOT EXISTS}"
+      DestinationArn: !GetAtt ProcessorFunction.Arn
+
+  CollectorConfig:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "${AWS::StackName}-collector-config"
+      Description: "Layer for the collector configuration"
+      ContentUri: config/
+    Metadata:
+      BuildMethod: makefile
 
 Outputs:
-  SpansProcessorFunctionArn:
-    Description: ARN of the Span processor Lambda function
-    Value: !GetAtt SpansProcessorFunction.Arn
+  ProcessorFunctionArn:
+    Description: ARN of the aws/spans processor Lambda function
+    Value: !GetAtt ProcessorFunction.Arn
 
-  SpanProcessorSecurityGroupId:
+  SecurityGroupId:
     Description: ID of the security group for the Span processor Lambda function
     Condition: HasVpcConfig
-    Value: !Ref SpanProcessorSecurityGroup
+    Value: !Ref SecurityGroup

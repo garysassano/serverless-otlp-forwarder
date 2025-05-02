@@ -1,7 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Transform: 'AWS::Serverless-2016-10-31'
+Transform: AWS::Serverless-2016-10-31
 Description: AWS SAM template for the serverless-otlp-forwarder application.
-
 
 Globals:
   Function:
@@ -12,14 +11,14 @@ Globals:
       ApplicationLogLevel: INFO
       SystemLogLevel: WARN
     Tracing: Active
-  
+
 Resources:
   # SQS Queue - Message Queue for Quotes
   # Receives quotes from the generator and provides them to the processor
   QuotesQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: !Sub '${AWS::StackName}-quotes-queue'
+      QueueName: !Sub ${AWS::StackName}-quotes-queue
       VisibilityTimeout: 180
       MessageRetentionPeriod: 345600  # 4 days
 
@@ -28,7 +27,7 @@ Resources:
   BackendApi:
     Type: AWS::Serverless::Api
     Properties:
-      Name: !Sub '${AWS::StackName}-api'
+      Name: !Sub ${AWS::StackName}-api
       StageName: prod
       TracingEnabled: true
       EndpointConfiguration:
@@ -43,20 +42,21 @@ Resources:
       BuildProperties:
         Binary: backend
     Properties:
-      FunctionName: !Sub '${AWS::StackName}-quote-storage-api'
+      FunctionName: !Sub ${AWS::StackName}-quote-storage-api
       CodeUri: ./rust
       Handler: bootstrap
       Runtime: provided.al2023
       Architectures:
         - arm64
-      Description: 'Backend API for quote storage with CRUD operations'
+      Description: Backend API for quote storage with CRUD operations
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref Table
       Environment:
         Variables:
-          OTEL_SERVICE_NAME: !Sub '${AWS::StackName}-quote-storage-api'
-          TABLE_NAME: !Sub '${AWS::StackName}-table'
+          OTEL_SERVICE_NAME: !Sub ${AWS::StackName}-quote-storage-api
+          TABLE_NAME: !Sub ${AWS::StackName}-table
+          ERROR_PROBABILITY: 0.1
       Events:
         PostQuote:
           Type: Api
@@ -87,36 +87,36 @@ Resources:
       BuildProperties:
         Binary: frontend
     Properties:
-      FunctionName: !Sub '${AWS::StackName}-quote-ui'
+      FunctionName: !Sub ${AWS::StackName}-quote-ui
       CodeUri: ./rust
       Handler: bootstrap
       Runtime: provided.al2023
       Architectures:
         - arm64
-      Description: 'User interface for viewing and interacting with quotes'
+      Description: User interface for viewing and interacting with quotes
       FunctionUrlConfig:
         AuthType: AWS_IAM
       Environment:
         Variables:
-          OTEL_SERVICE_NAME: !Sub '${AWS::StackName}-quote-ui'
-          TARGET_URL: !Sub 'https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod'
+          OTEL_SERVICE_NAME: !Sub ${AWS::StackName}-quote-ui
+          TARGET_URL: !Sub https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod
 
   # Lambda Function - Quote Processor
   # Processes quotes from SQS queue and forwards them to the backend API
   QuoteProcessorFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub '${AWS::StackName}-quote-processor'
+      FunctionName: !Sub ${AWS::StackName}-quote-processor
       CodeUri: ./python/processor
       Handler: main.lambda_handler
       Runtime: python3.13
       Architectures:
         - arm64
-      Description: 'Processes quotes from SQS and forwards them to the backend API'
+      Description: Processes quotes from SQS and forwards them to the backend API
       Environment:
         Variables:
-          OTEL_SERVICE_NAME: !Sub '${AWS::StackName}-quote-processor'
-          TARGET_URL: !Sub 'https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod/quotes'
+          OTEL_SERVICE_NAME: !Sub ${AWS::StackName}-quote-processor
+          TARGET_URL: !Sub https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod/quotes
       Events:
         SQSEvent:
           Type: SQS
@@ -129,18 +129,30 @@ Resources:
   # Periodically generates quotes and sends them to the SQS queue
   QuoteGeneratorFunction:
     Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2022"
+        Format: "cjs"
+        Platform: "node"
+        EntryPoints:
+          - index.ts
+          - init.js
+        External:
+          - "@aws-sdk/client-sqs"
     Properties:
-      FunctionName: !Sub '${AWS::StackName}-quote-generator'
+      FunctionName: !Sub ${AWS::StackName}-quote-generator
       CodeUri: ./node
       Handler: index.handler
       Runtime: nodejs22.x
       Architectures:
         - arm64
-      Description: 'Periodically fetches random quotes and sends them to SQS'
+      Description: Periodically fetches random quotes and sends them to SQS
       Environment:
         Variables:
-          OTEL_SERVICE_NAME: !Sub '${AWS::StackName}-quote-generator'
-          TARGET_URL: !Sub 'https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod/quotes'
+          OTEL_SERVICE_NAME: !Sub ${AWS::StackName}-quote-generator
+          TARGET_URL: !Sub https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod/quotes
           QUOTES_QUEUE_URL: !Ref QuotesQueue
       Policies:
         - SQSSendMessagePolicy:
@@ -150,7 +162,7 @@ Resources:
           Type: Schedule
           Properties:
             Schedule: rate(1 minute)
-            Description: "Trigger the Lambda function every time period"
+            Description: Trigger the Lambda function every time period
             Enabled: true
 
   # DynamoDB Table - Quote Storage
@@ -158,7 +170,7 @@ Resources:
   Table:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub '${AWS::StackName}-table'
+      TableName: !Sub ${AWS::StackName}-table
       AttributeDefinitions:
         - AttributeName: pk
           AttributeType: S
@@ -176,8 +188,8 @@ Resources:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:
       OriginAccessControlConfig:
-        Name: !Sub '${AWS::StackName}-quote-ui-oac'
-        Description: 'OAC for Quote UI Lambda Function URL'
+        Name: !Sub ${AWS::StackName}-quote-ui-oac
+        Description: OAC for Quote UI Lambda Function URL
         OriginAccessControlOriginType: lambda
         SigningBehavior: always
         SigningProtocol: sigv4
@@ -190,8 +202,8 @@ Resources:
       Action: lambda:InvokeFunctionUrl
       FunctionName: !GetAtt QuoteUIFunction.Arn
       Principal: cloudfront.amazonaws.com
-      SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${QuoteUICloudfrontDistribution}'
-      FunctionUrlAuthType: 'AWS_IAM'
+      SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${QuoteUICloudfrontDistribution}
+      FunctionUrlAuthType: AWS_IAM
 
   # CloudFront Distribution - Quote UI CDN
   # Low-cost CDN for serving the Quote UI globally with improved performance
@@ -201,7 +213,11 @@ Resources:
     Properties:
       DistributionConfig:
         Origins:
-          - DomainName: !Select [2, !Split ['/', !GetAtt QuoteUIFunctionUrl.FunctionUrl]]
+          - DomainName: !Select
+              - 2
+              - !Split
+                - /
+                - !GetAtt QuoteUIFunctionUrl.FunctionUrl
             Id: QuoteUIFunctionOrigin
             CustomOriginConfig:
               OriginProtocolPolicy: https-only
@@ -211,13 +227,13 @@ Resources:
           TargetOriginId: QuoteUIFunctionOrigin
           ViewerProtocolPolicy: redirect-to-https
           CachePolicyId: !Ref QuoteUICachePolicy
-          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # AllViewerExceptHostHeader policy
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # AllViewerExceptHostHeader policy
           LambdaFunctionAssociations:
             - EventType: origin-request
               LambdaFunctionARN: !Ref EdgeFunction.Version
             - EventType: origin-response
               LambdaFunctionARN: !Ref EdgeResponseFunction.Version
-        PriceClass: PriceClass_100  # Lowest cost option (North America and Europe only)
+        PriceClass: PriceClass_100 # Lowest cost option (North America and Europe only)
         HttpVersion: http2
         IPV6Enabled: true
 
@@ -227,13 +243,13 @@ Resources:
   EdgeFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub '${AWS::StackName}-edge-origin-request'
+      FunctionName: !Sub ${AWS::StackName}-edge-origin-request
       CodeUri: ./python/edge
       Handler: request.handler
       Runtime: python3.13
       Architectures:
         - x86_64  # Lambda@Edge only supports x86_64 architecture
-      Description: 'Lambda@Edge function for CloudFront request processing'
+      Description: Lambda@Edge function for CloudFront request processing
       MemorySize: 128
       Timeout: 5
       AutoPublishAlias: live
@@ -245,13 +261,13 @@ Resources:
   EdgeResponseFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub '${AWS::StackName}-edge-origin-response'
+      FunctionName: !Sub ${AWS::StackName}-edge-origin-response
       CodeUri: ./python/edge
       Handler: response.handler
       Runtime: python3.13
       Architectures:
         - x86_64  # Lambda@Edge only supports x86_64 architecture
-      Description: 'Lambda@Edge function for CloudFront response processing'
+      Description: Lambda@Edge function for CloudFront response processing
       MemorySize: 128
       Timeout: 5
       AutoPublishAlias: live
@@ -270,9 +286,9 @@ Resources:
               Service:
                 - lambda.amazonaws.com
                 - edgelambda.amazonaws.com
-            Action: 'sts:AssumeRole'
+            Action: sts:AssumeRole
       ManagedPolicyArns:
-        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
   # CloudFront Cache Policy - Quote UI
   # Custom cache policy that respects origin Cache-Control headers but excludes Host header
@@ -280,8 +296,9 @@ Resources:
     Type: AWS::CloudFront::CachePolicy
     Properties:
       CachePolicyConfig:
-        Name: !Sub '${AWS::StackName}-lambda-function-url-cache-policy'
-        Comment: 'Cache policy that respects origin Cache-Control headers but excludes Host header'
+        Name: !Sub ${AWS::StackName}-lambda-function-url-cache-policy
+        Comment: Cache policy that respects origin Cache-Control headers but excludes
+          Host header
         DefaultTTL: 0
         MinTTL: 0
         MaxTTL: 31536000  # 1 year
@@ -304,32 +321,32 @@ Resources:
 # Outputs - Resource information exposed after deployment 
 Outputs:
   QuoteUIFunctionArn:
-    Description: 'ARN of the Quote UI function'
+    Description: ARN of the Quote UI function
     Value: !GetAtt QuoteUIFunction.Arn
   QuoteStorageAPIFunctionArn:
-    Description: 'ARN of the Quote Storage API function'
+    Description: ARN of the Quote Storage API function
     Value: !GetAtt QuoteStorageAPIFunction.Arn
   QuoteProcessorFunctionArn:
-    Description: 'ARN of the Quote Processor function'
+    Description: ARN of the Quote Processor function
     Value: !GetAtt QuoteProcessorFunction.Arn
   BackendApiUrl:
-    Description: 'URL of the Quote API'
-    Value: !Sub 'https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod/quotes'
+    Description: URL of the Quote API
+    Value: !Sub https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod/quotes
   QuoteUIFunctionUrl:
-    Description: 'URL of the Quote UI function'
+    Description: URL of the Quote UI function
     Value: !GetAtt QuoteUIFunctionUrl.FunctionUrl
   CloudFrontUrl:
-    Description: 'CloudFront URL for accessing the Quote UI'
-    Value: !Sub 'https://${QuoteUICloudfrontDistribution.DomainName}'
+    Description: CloudFront URL for accessing the Quote UI
+    Value: !Sub https://${QuoteUICloudfrontDistribution.DomainName}
   EdgeFunctionArn:
-    Description: 'ARN of the Lambda@Edge function'
+    Description: ARN of the Lambda@Edge function
     Value: !GetAtt EdgeFunction.Arn
   EdgeFunctionVersionArn:
-    Description: 'ARN of the Lambda@Edge function version'
+    Description: ARN of the Lambda@Edge function version
     Value: !Ref EdgeFunction.Version
   EdgeResponseFunctionArn:
-    Description: 'ARN of the Lambda@Edge response function'
+    Description: ARN of the Lambda@Edge response function
     Value: !GetAtt EdgeResponseFunction.Arn
   EdgeResponseFunctionVersionArn:
-    Description: 'ARN of the Lambda@Edge response function version'
+    Description: ARN of the Lambda@Edge response function version
     Value: !Ref EdgeResponseFunction.Version
