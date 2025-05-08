@@ -35,11 +35,10 @@ jobs:
       # --- Conditional Benchmark Generation ---
       - name: Set up Rust
         if: github.event.inputs.regenerate_benchmark == 'true'
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-          profile: minimal
-          override: true
+          components: rustfmt, clippy
 
       - name: Set up SAM CLI
         if: github.event.inputs.regenerate_benchmark == 'true'
