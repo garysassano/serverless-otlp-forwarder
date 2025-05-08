@@ -34,7 +34,7 @@ jobs:
 
       # --- Conditional Benchmark Generation ---
       - name: Set up Rust
-        if: github.event.inputs.regenerate_benchmark == true
+        if: github.event.inputs.regenerate_benchmark == 'true'
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -42,30 +42,30 @@ jobs:
           override: true
 
       - name: Set up SAM CLI
-        if: github.event.inputs.regenerate_benchmark == true
+        if: github.event.inputs.regenerate_benchmark == 'true'
         uses: aws-actions/setup-sam@v2
         with:
           use-installer: true
 
       - name: Configure AWS Credentials
-        if: github.event.inputs.regenerate_benchmark == true
+        if: github.event.inputs.regenerate_benchmark == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.PAGES_DEPLOY_ROLE }}
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Install Startled CLI dependencies
-        if: github.event.inputs.regenerate_benchmark == true
+        if: github.event.inputs.regenerate_benchmark == 'true'
         working-directory: ./cli/startled/testbed
         run: make install
 
       - name: Run Startled benchmark tests
-        if: github.event.inputs.regenerate_benchmark == true
+        if: github.event.inputs.regenerate_benchmark == 'true'
         working-directory: ./cli/startled/testbed
         run: make test-all-runtimes
       
       - name: Generate Startled benchmark report
-        if: github.event.inputs.regenerate_benchmark == true
+        if: github.event.inputs.regenerate_benchmark == 'true'
         working-directory: ./cli/startled/testbed
         run: make report # Assumes this outputs to /tmp/benchmarks/reports
 
