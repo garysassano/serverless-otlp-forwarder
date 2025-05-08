@@ -1,0 +1,34 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+
+exporters:
+  otlphttp/traces:
+    endpoint: "${env:MOCK_OTLP_ENDPOINT}"
+  otlphttp/metrics:
+    endpoint: "${env:MOCK_OTLP_ENDPOINT}"
+  otlphttp/logs:
+    endpoint: "${env:MOCK_OTLP_ENDPOINT}"
+
+
+service:
+  pipelines:
+    traces:
+      receivers: 
+        - otlp
+      exporters: 
+        - otlphttp/traces
+    metrics:
+      receivers: 
+        - otlp
+      exporters: 
+        - otlphttp/metrics
+    logs:
+      receivers: 
+        - otlp
+      exporters: 
+        - otlphttp/logs
+  telemetry:
+    metrics:
+      address: localhost:8888

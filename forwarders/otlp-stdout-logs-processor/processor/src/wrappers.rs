@@ -61,10 +61,23 @@ impl SpanAttributesExtractor for LogsEventWrapper {
             Value::I64(log_data.log_events.len() as i64),
         );
 
+        // Create a carrier map for propagating trace context
+        let mut carrier = HashMap::new();
+
+        // Add X-Ray trace ID to the carrier if it's available in the environment
+        // and sampling is not disabled
+        if let Ok(trace_id) = std::env::var("_X_AMZN_TRACE_ID") {
+            // Only include the trace ID if sampling is enabled
+            if trace_id.contains("Sampled=1") {
+                carrier.insert("x-amzn-trace-id".to_string(), trace_id);
+            }
+        }
+
         SpanAttributes::builder()
             .span_name(log_data.log_group)
             .kind("consumer".to_string())
             .attributes(attributes)
+            .carrier(carrier)
             .build()
     }
 }

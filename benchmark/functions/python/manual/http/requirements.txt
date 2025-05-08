@@ -1,3 +1,0 @@
-lambda-otel-lite>=0.10.1
-urllib3>=2.3.0
-opentelemetry-instrumentation-urllib3>=0.52b0

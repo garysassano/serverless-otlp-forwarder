@@ -40,7 +40,7 @@ pub struct Collector {
     #[serde(default, deserialize_with = "deserialize_regex")]
     pub exclude: Option<Regex>,
     /// Optional flag to disable the collector without removing it
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_bool_from_any")]
     pub disabled: bool,
 }
 
@@ -57,6 +57,39 @@ where
             None
         }
     }))
+}
+
+fn deserialize_bool_from_any<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{Error, Unexpected};
+    struct BoolOrString;
+
+    impl serde::de::Visitor<'_> for BoolOrString {
+        type Value = bool;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a boolean or a string representing a boolean")
+        }
+
+        fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E> {
+            Ok(v)
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: Error,
+        {
+            match v {
+                "true" | "True" | "TRUE" => Ok(true),
+                "false" | "False" | "FALSE" => Ok(false),
+                _ => Err(Error::invalid_value(Unexpected::Str(v), &self)),
+            }
+        }
+    }
+
+    deserializer.deserialize_any(BoolOrString)
 }
 
 /// Container for managing multiple collector configurations.
@@ -297,8 +330,19 @@ impl Collector {
 /// Fetches collectors configuration from AWS Secrets Manager
 #[instrument(skip(client))]
 async fn fetch_collectors(client: &SecretsManagerClient) -> Result<Vec<Collector>> {
-    let prefix = env::var("COLLECTORS_SECRETS_KEY_PREFIX")
-        .context("COLLECTORS_SECRETS_KEY_PREFIX must be set")?;
+    let prefix = match env::var("COLLECTORS_SECRETS_KEY_PREFIX") {
+        Ok(val) => val,
+        Err(_) => {
+            tracing::info!("COLLECTORS_SECRETS_KEY_PREFIX not set, returning default collector");
+            return Ok(vec![Collector {
+                name: "extension".to_string(),
+                endpoint: "http://localhost:4318".to_string(),
+                auth: None,
+                exclude: None,
+                disabled: false,
+            }]);
+        }
+    };
 
     tracing::info!("Loading collectors secrets with prefix: {}", prefix);
 

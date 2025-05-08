@@ -131,11 +131,10 @@ async fn main() -> Result<(), LambdaError> {
         .with_service("xray")
         .with_signing_predicate(Box::new(|request| {
             // Only sign requests to AWS endpoints
-            if let Some(host) = request.uri().host() {
-                host.ends_with(".amazonaws.com")
-            } else {
-                false
-            }
+            request
+                .uri()
+                .host()
+                .is_some_and(|host| host.ends_with(".amazonaws.com"))
         }))
         .build()?;
 

@@ -118,10 +118,10 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as base64_engine, Engine};
 use bon::bon;
 use flate2::{write::GzEncoder, Compression};
-use futures_util::future::BoxFuture;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::transform::common::tonic::ResourceAttributesWithSchema;
 use opentelemetry_proto::transform::trace::tonic::group_spans_by_resource_and_scope;
+use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::resource::Resource;
 use opentelemetry_sdk::{
     error::OTelSdkError,
@@ -132,13 +132,13 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     env,
-    fmt::Display,
+    fmt::{self, Display},
     fs::OpenOptions,
     io::{self, Write},
     path::PathBuf,
     result::Result,
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 mod constants;
@@ -201,7 +201,7 @@ impl Display for LogLevel {
 ///
 /// This trait defines the interface for writing output lines. It is implemented
 /// by both the standard output handler and named pipe output handlers.
-trait Output: Send + Sync + std::fmt::Debug + std::any::Any {
+pub trait Output: Send + Sync + std::fmt::Debug + std::any::Any {
     /// Writes a single line of output
     ///
     /// # Arguments
@@ -212,6 +212,27 @@ trait Output: Send + Sync + std::fmt::Debug + std::any::Any {
     ///
     /// Returns `Ok(())` if the write was successful, or a `TraceError` if it failed
     fn write_line(&self, line: &str) -> Result<(), OTelSdkError>;
+
+    /// Checks if the output target is a named pipe.
+    ///
+    /// Returns `true` if the output is configured to write to a named pipe,
+    /// `false` otherwise (e.g., stdout).
+    fn is_pipe(&self) -> bool;
+
+    /// Performs a "touch" operation on the output target, primarily for named pipes.
+    ///
+    /// For named pipes, this should open and immediately close the pipe for writing
+    /// to generate an EOF signal for readers.
+    /// For other output types (like stdout), this is typically a no-op.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the touch was successful or is a no-op,
+    /// or a `TraceError` if opening/closing the pipe failed.
+    fn touch_pipe(&self) -> Result<(), OTelSdkError> {
+        // Default implementation is a no-op
+        Ok(())
+    }
 }
 
 /// Standard output implementation that writes to stdout
@@ -228,6 +249,10 @@ impl Output for StdOutput {
         writeln!(handle, "{}", line).map_err(|e| OTelSdkError::InternalFailure(e.to_string()))?;
 
         Ok(())
+    }
+
+    fn is_pipe(&self) -> bool {
+        false // Stdout is not a pipe
     }
 }
 
@@ -263,6 +288,68 @@ impl Output for NamedPipeOutput {
         })?;
 
         Ok(())
+    }
+
+    fn is_pipe(&self) -> bool {
+        true // This implementation is for named pipes
+    }
+
+    fn touch_pipe(&self) -> Result<(), OTelSdkError> {
+        // Open the pipe for writing and immediately close it (RAII handles close)
+        let _file = OpenOptions::new()
+            .write(true)
+            .open(&self.path)
+            .map_err(|e| OTelSdkError::InternalFailure(format!("Failed to touch pipe: {}", e)))?;
+        Ok(())
+    }
+}
+
+/// An Output implementation that writes lines to an internal buffer.
+#[derive(Clone, Default)]
+pub struct BufferOutput {
+    buffer: Arc<Mutex<Vec<String>>>,
+}
+
+impl BufferOutput {
+    /// Creates a new, empty BufferOutput.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Retrieves all lines currently in the buffer, clearing the buffer afterwards.
+    pub fn take_lines(&self) -> Result<Vec<String>, OTelSdkError> {
+        let mut guard = self.buffer.lock().map_err(|e| {
+            OTelSdkError::InternalFailure(format!(
+                "Failed to lock buffer mutex for take_lines: {}",
+                e
+            ))
+        })?;
+        Ok(std::mem::take(&mut *guard)) // Efficiently swaps the Vec with an empty one and wraps in Ok
+    }
+}
+
+impl Output for BufferOutput {
+    fn write_line(&self, line: &str) -> Result<(), OTelSdkError> {
+        let mut guard = self.buffer.lock().map_err(|e| {
+            OTelSdkError::InternalFailure(format!(
+                "Failed to lock buffer mutex for write_line: {}",
+                e
+            ))
+        })?;
+        guard.push(line.to_string());
+        Ok(())
+    }
+
+    fn is_pipe(&self) -> bool {
+        false // BufferOutput is not a pipe
+    }
+}
+
+// Need to implement Debug manually as Mutex doesn't implement Debug
+impl fmt::Debug for BufferOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Avoid locking the mutex in debug formatting if possible, or provide minimal info
+        f.debug_struct("BufferOutput").finish_non_exhaustive()
     }
 }
 
@@ -580,8 +667,18 @@ impl SpanExporter for OtlpStdoutSpanExporter {
     /// # Returns
     ///
     /// Returns a resolved future with `Ok(())` if the export was successful, or a `TraceError` if it failed
-    fn export(&mut self, batch: Vec<SpanData>) -> BoxFuture<'static, Result<(), OTelSdkError>> {
-        // Do all work synchronously
+    fn export(
+        &self,
+        batch: Vec<SpanData>,
+    ) -> impl std::future::Future<Output = OTelSdkResult> + Send {
+        // Check for empty batch and pipe output configuration
+        if batch.is_empty() && self.output.is_pipe() {
+            // Perform the "pipe touch" operation: open for writing and immediately close.
+            let touch_result = self.output.touch_pipe();
+            return Box::pin(std::future::ready(touch_result));
+        }
+
+        // Original export logic for non-empty batches or stdout output
         let result = (|| {
             // Convert spans to OTLP format
             let resource = self
@@ -683,9 +780,6 @@ use doc_comment::doctest;
 #[cfg(doctest)]
 doctest!("../README.md", readme);
 
-#[cfg(test)]
-use std::sync::Mutex;
-
 /// Test output implementation that captures to a buffer
 #[cfg(test)]
 #[derive(Debug, Default)]
@@ -712,6 +806,12 @@ impl Output for TestOutput {
         self.buffer.lock().unwrap().push(line.to_string());
         Ok(())
     }
+
+    fn is_pipe(&self) -> bool {
+        false // TestOutput is not a pipe
+    }
+
+    // touch_pipe uses the default no-op implementation
 }
 
 #[cfg(test)]
@@ -866,7 +966,7 @@ mod tests {
 
         // Create exporter with no compression (level 0)
         let no_compression_output = Arc::new(TestOutput::new());
-        let mut no_compression_exporter = OtlpStdoutSpanExporter {
+        let no_compression_exporter = OtlpStdoutSpanExporter {
             compression_level: 0,
             resource: None,
             output: no_compression_output.clone() as Arc<dyn Output>,
@@ -878,7 +978,7 @@ mod tests {
 
         // Create exporter with max compression (level 9)
         let max_compression_output = Arc::new(TestOutput::new());
-        let mut max_compression_exporter = OtlpStdoutSpanExporter {
+        let max_compression_exporter = OtlpStdoutSpanExporter {
             compression_level: 9,
             resource: None,
             output: max_compression_output.clone() as Arc<dyn Output>,
@@ -941,7 +1041,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_export_single_span() {
-        let (mut exporter, output) = OtlpStdoutSpanExporter::with_test_output();
+        let (exporter, output) = OtlpStdoutSpanExporter::with_test_output();
         let span = create_test_span();
 
         let result = exporter.export(vec![span]).await;
@@ -974,7 +1074,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_export_empty_batch() {
-        let mut exporter = OtlpStdoutSpanExporter::default();
+        let exporter = OtlpStdoutSpanExporter::default();
         let result = exporter.export(vec![]).await;
         assert!(result.is_ok());
     }
@@ -1037,7 +1137,7 @@ mod tests {
         let explicit_output = Arc::new(TestOutput::new());
 
         // Create an exporter with the default() method which will use the environment variable
-        let mut explicit_exporter = OtlpStdoutSpanExporter::builder()
+        let explicit_exporter = OtlpStdoutSpanExporter::builder()
             .output(explicit_output.clone())
             .build();
 

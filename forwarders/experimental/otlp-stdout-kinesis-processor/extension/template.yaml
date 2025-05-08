@@ -37,18 +37,30 @@ Resources:
       CodeUri: example/
       Handler: app.handler
       Runtime: python3.13
-      Tracing: Active
+      Tracing: Disabled
       Architectures:
         - arm64
       LoggingConfig:
         LogFormat: JSON
         ApplicationLogLevel: INFO
         SystemLogLevel: WARN
+      FunctionUrlConfig:
+        AuthType: NONE
       Layers:
         - !Ref ExtensionLayerARM64
       Environment:
         Variables:
-          OTLP_STDOUT_KINESIS_STREAM_NAME: !ImportValue serverless-otlp-forwarder-kinesis-processor:otlp-stream-name
+          OTLP_STDOUT_SPAN_EXPORTER_OUTPUT_TYPE: pipe
+          OTEL_LITE_EXTENSION_ENABLE_PLATFORM_TELEMETRY: true
+          OTEL_LITE_EXTENSION_STREAM_NAME: !ImportValue otlp-stdout-kinesis-processor:otlp-stream-name
       Policies:
         - KinesisCrudPolicy:
-            StreamName: !ImportValue serverless-otlp-forwarder-kinesis-processor:otlp-stream-name
+            StreamName: !ImportValue otlp-stdout-kinesis-processor:otlp-stream-name
+
+Outputs:
+  ExtensionLayerARM64Arn:
+    Description: "ARN of the extension layer for arm64"
+    Value: !Ref ExtensionLayerARM64
+  ExampleFunctionUrl:
+    Description: "URL of the example function for arm64"
+    Value: !GetAtt ExampleFunctionARM64Url.FunctionUrl

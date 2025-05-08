@@ -29,23 +29,26 @@ traced = create_traced_handler(
 )
 
 
+
+@tracer.start_as_current_span("nested_function")
 def nested_function(event: dict[str, Any]) -> str:
     """Simple nested function that creates its own span.
-
-    This function demonstrates how to create a child span from the current context.
-    The span will automatically become a child of the currently active span.
     """
-    # Create a child span - it will automatically use the active span as parent
-    with tracer.start_as_current_span("nested_function") as span:
-        span.add_event("Nested function called")
-        if event.get("rawPath") == "/error":
-            # simulate a random error
-            r = random.random()
-            if r < 0.25:
-                raise ValueError("expected error")
-            elif r < 0.5:
-                raise RuntimeError("unexpected error")
-        return "success"
+    span = trace.get_current_span()
+    span.add_event("Nested function called")
+    if event.get("rawPath") ==  "/error":
+        # simulate a random error
+        r = random.random()
+        if r < 0.25:
+            raise ValueError("expected error")
+        elif r < 0.5:
+            raise RuntimeError("unexpected error")
+    # Create three child spans using a loop
+    for i in range(1, 4):
+        with tracer.start_as_current_span(f"span_{i}") as span:
+            span.add_event(f"Inside span_{i}")
+            span.set_attribute("span.index", i)
+    return "success"
 
 
 @traced

@@ -8,7 +8,7 @@ manipulation, or origin selection.
 For more information on Lambda@Edge, see:
 https://docs.aws.amazon.com/lambda/latest/dg/lambda-edge.html
 """
-from lambda_otel_lite import init_telemetry, create_traced_handler, SpanAttributes, TriggerType
+from lambda_otel_lite import init_telemetry, create_traced_handler, SpanAttributes, TriggerType, ProcessorMode
 from opentelemetry import trace, propagate
 from opentelemetry.trace import SpanKind
 from opentelemetry.sdk.extension.aws.trace import AwsXRayIdGenerator
@@ -18,8 +18,10 @@ from opentelemetry.propagators.aws import AwsXRayPropagator
 propagate.set_global_textmap(AwsXRayPropagator())
 
 # Initialize telemetry with X-Ray ID generator
-tracer, completion_handler = init_telemetry(id_generator=AwsXRayIdGenerator())
-
+tracer, completion_handler = init_telemetry(
+    id_generator=AwsXRayIdGenerator(), 
+    processor_mode=ProcessorMode.ASYNC
+)
 
 # Create a CloudFront event extractor
 def cloudfront_origin_request_extractor(event, context):
@@ -102,22 +104,24 @@ def handler(event, context):
     """
     # Get the current span created by the traced_handler decorator
     current_span = trace.get_current_span()
-    
     # Extract the request from the CloudFront event
     request = event['Records'][0]['cf']['request']
     
     # Add events to the current span
-    current_span.add_event("Processing request", {
-        "method": request['method'],
-        "uri": request['uri'],
-        "origin": request.get('origin', {}).get('custom', {}).get('domainName', 'unknown')
-    })
+    current_span.add_event(
+        name="edge.request",
+        attributes={
+            "event.severity_text": "INFO",
+            "event.severity_number": 9,
+            "event.body": f"received request from ip: {request['clientIp']} for {request['uri']}"
+        }
+    )
     
     # Initialize headers if not present
     if 'headers' not in request:
         request['headers'] = {}
         
-    # Inject trace context into headers
+    # Inject trace context into headers to be sent to the origin via CloudFront
     carrier = {}
     propagate.inject(carrier)
     
@@ -129,13 +133,13 @@ def handler(event, context):
             'value': value
         }]
     
-    current_span.add_event("Forwarding request", {
-        "tracecontext.injected": "true",
-        "headers.count": str(len(request['headers']))
-    })
+    current_span.add_event(
+        name="edge.forwarding",
+        attributes={
+            "tracecontext.injected": "true",
+            "headers.count": str(len(request['headers']))
+        }
+    )
 
-    import json
-    print(json.dumps(request))
-    
     # Return the modified request with trace context headers
     return request 

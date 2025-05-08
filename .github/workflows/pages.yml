@@ -1,19 +1,13 @@
-name: Deploy Jekyll with GitHub Pages dependencies preinstalled
+name: Deploy Site with Optional Benchmark Regeneration
 
 on:
-  # Runs on pushes targeting the default branch
-  push:
-    branches: ["main"]
-    paths:
-      - 'docs/**'
-  # Runs on pull requests targeting the default branch
-  pull_request:
-    branches: ["main"]
-    types: [opened, synchronize, labeled]
-    paths:
-      - 'docs/**'
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+    inputs:
+      regenerate_benchmark:
+        description: 'Regenerate benchmark report? (true/false)'
+        required: true
+        default: true # Changed to boolean true
+        type: boolean
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
@@ -28,18 +22,84 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Build job
   build:
     runs-on: ubuntu-latest
-    # Run on push to main, manual trigger, or PRs with safe-to-test label
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'approved')
+    outputs:
+      benchmarks_processed: ${{ steps.prepare_benchmark_dir.outputs.benchmarks_processed }} # Output whether new benchmarks were processed
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for Jekyll (e.g., for last modified dates)
+
+      # --- Conditional Benchmark Generation ---
+      - name: Set up Rust
+        if: github.event.inputs.regenerate_benchmark == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Set up SAM CLI
+        if: github.event.inputs.regenerate_benchmark == 'true'
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS Credentials
+        if: github.event.inputs.regenerate_benchmark == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.PAGES_DEPLOY_ROLE }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          mask-aws-account-id: true
+
+      - name: Install Startled CLI dependencies
+        if: github.event.inputs.regenerate_benchmark == 'true'
+        working-directory: ./cli/startled/testbed
+        run: make install
+
+      - name: Run Startled benchmark tests
+        if: github.event.inputs.regenerate_benchmark == 'true'
+        working-directory: ./cli/startled/testbed
+        run: make test-all-runtimes
+      
+      - name: Generate Startled benchmark report
+        if: github.event.inputs.regenerate_benchmark == 'true'
+        working-directory: ./cli/startled/testbed
+        run: make report BASE_URL=/benchmark
+
+      # --- Prepare benchmark directory in docs ---
+      - name: Prepare benchmark directory for Jekyll
+        id: prepare_benchmark_dir
+        run: |
+          mkdir -p docs/benchmark
+          benchmarks_processed_flag="false"
+          if [[ "${{ github.event.inputs.regenerate_benchmark }}" == "true" ]]; then
+            echo "Benchmark regeneration was requested."
+            if [ -d "/tmp/benchmark/reports" ] && [ "$(ls -A /tmp/benchmark/reports)" ]; then
+              echo "Benchmark report found at /tmp/benchmark/reports. Copying..."
+              cp -r /tmp/benchmark/reports/* docs/benchmark/
+              benchmarks_processed_flag="true"
+            else
+              echo "/tmp/benchmark/reports is empty or does not exist. Creating placeholder."
+              echo "<h1>Benchmark Report Not Generated</h1><p>Source /tmp/benchmark/reports was empty or missing during requested regeneration.</p>" > docs/benchmark/index.html
+            fi
+          elif [[ ! -f "docs/benchmark/index.html" && ! "$(ls -A docs/benchmark 2>/dev/null)" ]]; then
+             # If not regenerating AND docs/benchmark is empty or missing index.html, create placeholder.
+             # This preserves existing content if regeneration is skipped.
+             echo "Benchmark regeneration was skipped. No existing benchmark content found. Creating placeholder."
+             echo "<h1>Benchmark Data Not Available</h1><p>Benchmark regeneration was not performed in this run.</p>" > docs/benchmark/index.html
+          else
+             echo "Benchmark regeneration skipped. Existing content in docs/benchmark will be used or directory is already populated."
+          fi
+          echo "benchmarks_processed=$benchmarks_processed_flag" >> $GITHUB_OUTPUT
+          
+      # --- Jekyll Build ---
       - name: Setup Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.2'
+          ruby-version: '3.2' 
           bundler-cache: true
           working-directory: docs
       - name: Setup Pages
@@ -55,15 +115,13 @@ jobs:
         with:
           path: docs/_site
 
-  # Deployment job
   deploy:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     needs: build
-    # Only run deployment on push to main, not on pull requests
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     steps:
       - name: Deploy to GitHub Pages
         id: deployment

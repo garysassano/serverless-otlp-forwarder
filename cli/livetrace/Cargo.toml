@@ -1,0 +1,66 @@
+[package]
+name = "livetrace"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# AWS SDK (Inherit from workspace where possible, specify version if not)
+aws-config = { workspace = true }
+aws-sdk-cloudwatchlogs = { workspace = true }
+aws-sdk-cloudformation = { workspace = true }
+aws-sdk-sts = { workspace = true }
+
+# Async Runtime & Utilities (Inherit from workspace)
+tokio = { workspace = true }
+futures = { workspace = true }
+
+# HTTP Client (Inherit from workspace)
+reqwest = { workspace = true, features = ["json", "gzip"] } # Add required features
+
+# Serialization / Deserialization (Inherit from workspace)
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Encoding / Compression (Inherit from workspace)
+base64 = { workspace = true }
+flate2 = { workspace = true }
+
+# Protobuf (Inherit from workspace)
+prost = { workspace = true }
+opentelemetry-proto = { workspace = true } # Inherit version and features
+
+# Local Workspace Crates (Path dependencies are fine)
+otlp-stdout-span-exporter = { workspace = true }
+
+# CLI Arguments (Inherit from workspace)
+clap = { workspace = true, features = ["derive", "env"] } # Add required features
+
+# Logging (Inherit from workspace)
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] } # Add required features
+
+# Error Handling (Inherit from workspace)
+anyhow = { workspace = true }
+
+# Console Coloring and Table
+colored = { workspace = true }
+comfy-table = { workspace = true, features = ["tty", "custom_styling"] }
+# Timestamp Formatting
+chrono = { workspace = true, features = ["clock"] }
+
+
+toml.workspace = true
+indexmap = { workspace = true, features = ["serde"] }
+
+globset.workspace = true
+# New dependency
+hex = { workspace = true }
+# Spinner and progress indicators
+indicatif = { workspace = true }
+terminal_size = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

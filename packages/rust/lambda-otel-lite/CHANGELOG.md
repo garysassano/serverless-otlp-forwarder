@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2025-04-30
+
+### Changed
+- Modified `LambdaSpanProcessor::force_flush` to export all buffered spans in a single batch, ensuring atomicity and supporting the pipe touch mechanism in the exporter.
+- Removed the `max_batch_size` configuration option and `LAMBDA_SPAN_PROCESSOR_BATCH_SIZE` environment variable, as batching during flush is no longer performed.
+
+### Dependency Updates
+- Updated `otlp-stdout-span-exporter` dependency to `0.15.0`.
+
+## [0.14.0] - 2025-04-21
+### Changed
+- Updated otlp-stdout-span-exporter dependency to version 0.14.0
+- Removed need to use Box::new() when creating OtlpStdoutSpanExporter instances
+- Updated SpanExporter trait implementation in testing code to match newer SDK
+- Simplified function names in example templates
+- Enhanced examples with better event handling and explicit attribute usage
+
+## [0.13.1] - 2025-03-29
+### Fixed
+- Changed propagator registration order to prioritize W3C TraceContext over X-Ray when both are present
+- Fixed handling of Sampled=0 in X-Ray trace headers to allow proper root span sampling
+- Improved context extraction logic from the _X_AMZN_TRACE_ID environment variable
+- Enhanced X-Ray propagation with better validity and sampling checks
+
 ## [0.13.0] - 2025-03-28
 ### Added
 - Added ability to programmatically set the processor mode via `TelemetryConfig.processor_mode`

@@ -8,7 +8,7 @@ for response transformation, header manipulation, or error handling.
 For more information on Lambda@Edge, see:
 https://docs.aws.amazon.com/lambda/latest/dg/lambda-edge.html
 """
-from lambda_otel_lite import init_telemetry, create_traced_handler, SpanAttributes, TriggerType
+from lambda_otel_lite import init_telemetry, create_traced_handler, SpanAttributes, TriggerType, ProcessorMode
 from opentelemetry import trace, propagate
 from opentelemetry.trace import SpanKind
 from opentelemetry.sdk.extension.aws.trace import AwsXRayIdGenerator
@@ -18,7 +18,10 @@ from opentelemetry.propagators.aws import AwsXRayPropagator
 propagate.set_global_textmap(AwsXRayPropagator())
 
 # Initialize telemetry with X-Ray ID generator
-tracer, completion_handler = init_telemetry(id_generator=AwsXRayIdGenerator())
+tracer, completion_handler = init_telemetry(
+    id_generator=AwsXRayIdGenerator(), 
+    processor_mode=ProcessorMode.ASYNC
+)
 
 # Create a CloudFront origin response event extractor
 def cloudfront_origin_response_extractor(event, context):
@@ -123,12 +126,14 @@ def handler(event, lambda_context):
     request = cf_record['request']
     
     # Add events to the current span
-    current_span.add_event("Processing response", {
-        "method": request['method'],
-        "uri": request['uri'],
-        "status": response['status'],
-        "origin": request.get('origin', {}).get('custom', {}).get('domainName', 'unknown')
-    })
+    current_span.add_event(
+        name="edge.response",
+        attributes={
+            "event.severity_text": "INFO",
+            "event.severity_number": 9,
+            "event.body": f"received response from origin for {request['uri']}"
+        }
+    )
     
     # Example: Add a custom header to the response
     if 'headers' not in response:
@@ -139,10 +144,14 @@ def handler(event, lambda_context):
         'value': 'true'
     }]
     
-    current_span.add_event("Forwarding response", {
-        "status": response['status'],
-        "headers.count": str(len(response['headers']))
-    })
+    current_span.add_event(
+        name="edge.forwarding",
+        attributes={
+            "event.severity_text": "INFO",
+            "event.severity_number": 9,
+            "event.body": f"forwarding response to viewer for {request['uri']}"
+        }
+    )
     
     # Return the processed response
     return response 
