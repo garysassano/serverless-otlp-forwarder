@@ -58,6 +58,7 @@ test-runtime:
 		-s "$(RUNTIME)" \
 		-d "/tmp/$(STACK_NAME)/$(RESULT_DIR)" \
 		--proxy proxy 
+		--base-url "/benchmark"
 
 # Generate benchmark report
 report:
