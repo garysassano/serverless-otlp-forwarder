@@ -22,10 +22,11 @@ MEMORY_CONFIGS := 128 512 1024
 CONCURRENCY ?= 10
 REQUESTS ?= 100
 STACK_NAME ?= benchmark
+BASE_URL ?= /benchmark/reports
 
 # Result and report directories (override with env vars if needed)
 RESULT_DIR ?= results
-REPORTS_DIR ?= reports
+REPORTS_DIR ?= comparison
 
 # List of runtimes to test
 RUNTIMES := rust node python
@@ -58,7 +59,7 @@ test-runtime:
 		-s "$(RUNTIME)" \
 		-d "/tmp/$(STACK_NAME)/$(RESULT_DIR)" \
 		--proxy proxy 
-		--base-url "/benchmark"
+		--base-url "$(BASE_URL)"
 
 # Generate benchmark report
 report:

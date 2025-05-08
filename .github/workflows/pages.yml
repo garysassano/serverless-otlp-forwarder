@@ -68,7 +68,7 @@ jobs:
       - name: Generate Startled benchmark report
         if: github.event.inputs.regenerate_benchmark == 'true'
         working-directory: ./cli/startled/testbed
-        run: make report # Assumes this outputs to /tmp/benchmarks/reports
+        run: make report BASE_URL=/benchmark
 
       # --- Prepare benchmark directory in docs ---
       - name: Prepare benchmark directory for Jekyll
@@ -78,13 +78,13 @@ jobs:
           benchmarks_processed_flag="false"
           if [[ "${{ github.event.inputs.regenerate_benchmark }}" == "true" ]]; then
             echo "Benchmark regeneration was requested."
-            if [ -d "/tmp/benchmarks/reports" ] && [ "$(ls -A /tmp/benchmarks/reports)" ]; then
-              echo "Benchmark report found at /tmp/benchmarks/reports. Copying..."
-              cp -r /tmp/benchmarks/reports/* docs/benchmark/
+            if [ -d "/tmp/benchmark/reports" ] && [ "$(ls -A /tmp/benchmark/reports)" ]; then
+              echo "Benchmark report found at /tmp/benchmark/reports. Copying..."
+              cp -r /tmp/benchmark/reports/* docs/benchmark/
               benchmarks_processed_flag="true"
             else
-              echo "/tmp/benchmarks/reports is empty or does not exist. Creating placeholder."
-              echo "<h1>Benchmark Report Not Generated</h1><p>Source /tmp/benchmarks/reports was empty or missing during requested regeneration.</p>" > docs/benchmark/index.html
+              echo "/tmp/benchmark/reports is empty or does not exist. Creating placeholder."
+              echo "<h1>Benchmark Report Not Generated</h1><p>Source /tmp/benchmark/reports was empty or missing during requested regeneration.</p>" > docs/benchmark/index.html
             fi
           elif [[ ! -f "docs/benchmark/index.html" && ! "$(ls -A docs/benchmark 2>/dev/null)" ]]; then
              # If not regenerating AND docs/benchmark is empty or missing index.html, create placeholder.
