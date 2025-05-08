@@ -26,7 +26,7 @@ BASE_URL ?= /benchmark/reports
 
 # Result and report directories (override with env vars if needed)
 RESULT_DIR ?= results
-REPORTS_DIR ?= comparison
+REPORTS_DIR ?= reports
 
 # List of runtimes to test
 RUNTIMES := rust node python
