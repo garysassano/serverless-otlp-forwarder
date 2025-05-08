@@ -53,6 +53,7 @@ jobs:
         with:
           role-to-assume: ${{ secrets.PAGES_DEPLOY_ROLE }}
           aws-region: ${{ secrets.AWS_REGION }}
+          mask-aws-account-id: true
 
       - name: Install Startled CLI dependencies
         if: github.event.inputs.regenerate_benchmark == 'true'
