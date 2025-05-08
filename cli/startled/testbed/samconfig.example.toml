@@ -1,0 +1,11 @@
+version = 0.1
+[default.build.parameters]
+beta_features = true
+
+[default.deploy.parameters]
+stack_name = "benchmark"
+resolve_s3 = true
+s3_prefix = "benchmark"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+image_repositories = []
