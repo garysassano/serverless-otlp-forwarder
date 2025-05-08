@@ -30,7 +30,13 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 // Internal Crate Imports
 use crate::aws_setup::setup_aws_resources;
 use crate::cli::{parse_attr_globs, CliArgs, ColoringMode};
-use crate::config::{load_and_resolve_config, save_profile_config, EffectiveConfig, ProfileConfig};
+use crate::config::{
+    load_and_resolve_config, load_or_default_config_file,
+    merge_into_profile_config,
+    save_profile_config,
+    EffectiveConfig,
+    ProfileConfig,
+};
 use crate::console_display::{display_console, get_terminal_width, Theme};
 use crate::forwarder::{parse_otlp_headers_from_vec, send_batch};
 use crate::live_tail_adapter::start_live_tail_task;
@@ -70,15 +76,32 @@ async fn main() -> Result<()> {
 
     // Save Profile Check
     if let Some(profile_name) = args.save_profile.as_ref() {
-        // Convert CliArgs to the savable ProfileConfig format
-        let profile_to_save = ProfileConfig::from_cli_args(&args);
-        // Call the actual save function
-        save_profile_config(profile_name, &profile_to_save)?;
+        // 1. Load existing config or create a default one
+        let config_file = load_or_default_config_file()?;
+
+        // 2. Get the existing profile config or a default one
+        let existing_profile_config = config_file
+            .profiles
+            .get(profile_name)
+            .cloned()
+            .unwrap_or_default();
+
+        // 3. Generate the ProfileConfig from the current CLI arguments
+        let cli_profile_config = ProfileConfig::from_cli_args(&args);
+
+        // 4. Merge the CLI arguments into the existing profile config
+        let merged_profile_config =
+            merge_into_profile_config(&existing_profile_config, &cli_profile_config);
+
+        // 5. Call save_profile_config with the profile name and the merged data.
+        //    It handles loading the file again and inserting/writing internally.
+        save_profile_config(profile_name, &merged_profile_config)?;
+
         println!(
-            "Configuration saved to profile '{}'. Exiting.",
-            profile_name
+            "Configuration profile '{}' updated in {}.",
+            profile_name,
+            config::get_config_path()?.display() // Keep config:: here as get_config_path wasn't imported
         );
-        return Ok(());
     }
     // End Save Profile Check
 

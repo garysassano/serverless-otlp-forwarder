@@ -74,7 +74,7 @@ pub async fn setup_aws_resources(
     // --- Add validation step ---
     tracing::debug!("Validating discovered log group names...");
     let validated_log_group_names =
-        validate_log_groups(&cwl_client, resolved_log_group_names).await?;
+        validate_log_groups(&cwl_client, resolved_log_group_names, &region_str).await?;
     tracing::debug!(
         "Validation complete. Valid names: {:?}",
         validated_log_group_names
@@ -281,44 +281,57 @@ async fn discover_log_groups_from_stack(
     Ok(discovered_groups)
 }
 
-/// Validates a list of potential log group names, checking for Lambda@Edge variants if necessary.
+/// Validates a list of potential log group names, prioritizing Lambda@Edge patterns.
 pub async fn validate_log_groups(
     cwl_client: &CwlClient,
     initial_names: Vec<String>,
+    region_str: &str,
 ) -> Result<Vec<String>> {
-    let checks = initial_names.into_iter().map(|name| {
-        let client = cwl_client.clone(); // Clone client for concurrent use
-        async move {
-            let describe_result = client
-                .describe_log_groups()
-                .log_group_name_prefix(&name) // Check if the original name exists
-                .limit(1)
-                .send()
-                .await;
+    const LAMBDA_PREFIX: &str = "/aws/lambda/";
 
-            match describe_result {
-                Ok(output) => {
-                    if output.log_groups.is_some_and(|lgs| lgs.iter().any(|lg| lg.log_group_name.as_deref() == Some(&name))) {
-                        tracing::debug!(log_group = %name, "Validated existing log group");
-                        Ok(Some(name)) // Original name found and matches
-                    } else {
-                        check_lambda_edge_variant(&client, name).await // Try edge variant
+    let checks = initial_names.into_iter().map(|name| {
+        let client = cwl_client.clone();
+        let region = region_str.to_string();
+        async move {
+            if name.starts_with(LAMBDA_PREFIX) {
+                let base_name_part = name.strip_prefix(LAMBDA_PREFIX).unwrap_or(&name);
+
+                let potential_edge_name = format!("{}{}.{}", LAMBDA_PREFIX, region, base_name_part);
+                tracing::debug!(log_group=%name, potential_edge_name=%potential_edge_name, "Checking for Lambda@Edge variant first");
+
+                match describe_exact_log_group(&client, &potential_edge_name).await {
+                    Ok(Some(found_edge_name)) => {
+                        tracing::debug!(log_group=%found_edge_name, "Validated exact Lambda@Edge log group name");
+                        Ok(Some(found_edge_name))
                     }
+                    Ok(None) => {
+                        tracing::debug!(log_group=%name, potential_edge_name=%potential_edge_name, "Lambda@Edge variant not found, checking original name");
+                         match describe_exact_log_group(&client, &name).await {
+                            Ok(Some(found_original_name)) => {
+                                tracing::debug!(log_group=%found_original_name, "Validated original Lambda log group name after checking edge variant");
+                                Ok(Some(found_original_name))
+                            }
+                            Ok(None) => {
+                                tracing::warn!(log_group=%name, potential_edge_name=%potential_edge_name, "Neither Lambda@Edge variant nor original name found. Skipping.");
+                                Ok(None)
+                            }
+                            Err(e) => Err(e.context(format!("Error validating original Lambda log group name '{}' after checking edge variant", name))),
+                         }
+                    }
+                     Err(e) => Err(e.context(format!("Error validating potential Lambda@Edge log group name '{}'", potential_edge_name))),
                 }
-                Err(e) => {
-                    if let Some(err) = e.as_service_error() {
-                        match err.meta().code() {
-                            Some("ResourceNotFoundException") => {
-                                check_lambda_edge_variant(&client, name).await // Try edge variant
-                            }
-                            _ => {
-                                let context_msg = format!("Failed to describe log group '{}' due to SDK service error code: {:?}", name, err.meta().code());
-                                Err(anyhow::Error::new(e).context(context_msg))
-                            }
-                        }
-                    } else {
-                        Err(anyhow::Error::new(e).context(format!("Failed to describe log group '{}'", name)))
-                    }
+            } else {
+                tracing::debug!(log_group=%name, "Checking non-Lambda log group name directly");
+                 match describe_exact_log_group(&client, &name).await {
+                     Ok(Some(found_name)) => {
+                         tracing::debug!(log_group = %found_name, "Validated non-Lambda log group");
+                          Ok(Some(found_name))
+                     }
+                     Ok(None) => {
+                          tracing::warn!(log_group=%name, "Non-Lambda log group name not found. Skipping.");
+                          Ok(None)
+                     }
+                     Err(e) => Err(e.context(format!("Error validating non-Lambda log group '{}'", name))),
                 }
             }
         }
@@ -327,69 +340,54 @@ pub async fn validate_log_groups(
     let results = futures::future::join_all(checks).await;
 
     let mut validated_names = Vec::new();
+    let mut errors = Vec::new(); // Collect errors to potentially report them all
+
     for result in results {
         match result {
             Ok(Some(name)) => validated_names.push(name),
-            Ok(None) => {}           // Logged within the check, skip
-            Err(e) => return Err(e), // Propagate the first error
+            Ok(None) => {} // Logged within the check, skip
+            Err(e) => errors.push(e), // Collect error
         }
+    }
+
+    // If any errors occurred during validation, return the first one
+    if let Some(first_error) = errors.into_iter().next() {
+        return Err(first_error);
     }
 
     Ok(validated_names)
 }
 
-/// Helper to check for the Lambda@Edge log group variant.
-async fn check_lambda_edge_variant(
+/// Helper to describe a single log group by exact name.
+async fn describe_exact_log_group(
     client: &CwlClient,
-    original_name: String,
+    name: &str,
 ) -> Result<Option<String>> {
-    const LAMBDA_PREFIX: &str = "/aws/lambda/";
-    if original_name.starts_with(LAMBDA_PREFIX) {
-        let base_name = original_name.strip_prefix(LAMBDA_PREFIX).unwrap();
-        let edge_name = format!("/aws/lambda/us-east-1.{}", base_name);
-        tracing::debug!(original_log_group = %original_name, edge_variant = %edge_name, "Original log group not found/matched, checking Lambda@Edge variant");
-
-        match client
-            .describe_log_groups()
-            .log_group_name_prefix(&edge_name)
-            .limit(1)
-            .send()
-            .await
-        {
-            Ok(output) => {
-                if output.log_groups.is_some_and(|lgs| {
-                    lgs.iter()
-                        .any(|lg| lg.log_group_name.as_deref() == Some(&edge_name))
-                }) {
-                    tracing::debug!(log_group = %edge_name, "Found and validated Lambda@Edge log group variant"); // Keep info for success
-                    Ok(Some(edge_name))
-                } else {
-                    tracing::warn!(log_group = %original_name, edge_variant = %edge_name, "Original log group and Lambda@Edge variant not found/matched. Skipping.");
-                    Ok(None)
-                }
-            }
-            Err(e) => {
-                if let Some(err) = e.as_service_error() {
-                    match err.meta().code() {
-                        Some("ResourceNotFoundException") => {
-                            tracing::warn!(log_group = %original_name, edge_variant = %edge_name, "Original log group and Lambda@Edge variant not found. Skipping.");
-                            Ok(None)
-                        }
-                        _ => {
-                            let context_msg = format!("Failed to describe Lambda@Edge variant '{}' due to SDK service error code: {:?}", edge_name, err.meta().code());
-                            Err(anyhow::Error::new(e).context(context_msg))
-                        }
-                    }
-                } else {
-                    Err(anyhow::Error::new(e).context(format!(
-                        "Failed to describe Lambda@Edge variant '{}'",
-                        edge_name
-                    )))
-                }
+     match client
+        .describe_log_groups()
+        .log_group_name_prefix(name) // Use prefix for API
+        .limit(1)
+        .send()
+        .await
+    {
+        Ok(output) => {
+            // Check if the *exact* name was returned
+            if output.log_groups.is_some_and(|lgs| lgs.iter().any(|lg| lg.log_group_name.as_deref() == Some(name))) {
+                Ok(Some(name.to_string()))
+            } else {
+                Ok(None) // Prefix matched something else, or nothing
             }
         }
-    } else {
-        tracing::warn!(log_group = %original_name, "Log group not found and does not match Lambda pattern. Skipping.");
-        Ok(None)
+        Err(e) => {
+            // Specifically handle ResourceNotFoundException as Ok(None)
+            if let Some(service_error) = e.as_service_error() {
+                // Compare the error code string directly
+                if service_error.meta().code() == Some("ResourceNotFoundException") {
+                     return Ok(None);
+                }
+            }
+            // Otherwise, it's an actual error
+             Err(anyhow::Error::new(e).context(format!("Failed to describe log group '{}'", name)))
+        }
     }
 }

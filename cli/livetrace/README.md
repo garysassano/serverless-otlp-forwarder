@@ -151,7 +151,7 @@ Control the appearance of the console output:
 *   `-v, -vv, -vvv`: Increase logging verbosity (Info -> Debug -> Trace). Internal logs go to stderr.
 *   `--forward-only`: Only forward telemetry via OTLP; do not display traces/events in the console. Requires an endpoint to be configured.
 *   `--config-profile <PROFILE_NAME>`: Load configuration from a named profile in `.livetrace.toml`.
-*   `--save-profile <PROFILE_NAME>`: Save the current command-line arguments as a named profile in `.livetrace.toml` and exit.
+*   `--save-profile <PROFILE_NAME>`: Save the current command-line arguments as a named profile in `.livetrace.toml`.
 
 ## Console Output
 

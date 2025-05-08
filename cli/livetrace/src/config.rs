@@ -1,7 +1,8 @@
 use crate::cli::{CliArgs, ColoringMode};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fs, io::Write, path::Path};
+use indexmap::IndexMap;
+use std::{fs, io::Write, path::Path};
 
 // Default filename for the configuration
 const LIVETRACE_TOML: &str = ".livetrace.toml";
@@ -17,7 +18,7 @@ pub struct ConfigFile {
     pub global: Option<ProfileConfig>,
 
     #[serde(default)]
-    pub profiles: HashMap<String, ProfileConfig>,
+    pub profiles: IndexMap<String, ProfileConfig>,
 }
 
 /// Represents the configuration settings within a profile (or global section).
@@ -302,13 +303,13 @@ fn apply_cli_args_to_effective(cli_args: &CliArgs, effective: &mut EffectiveConf
 // Add the new implementation:
 use std::path::PathBuf; // Need this for path manipulation
 
-fn get_config_path() -> Result<PathBuf> {
+pub fn get_config_path() -> Result<PathBuf> {
     // For now, just use the local directory. Could be extended later.
     Ok(PathBuf::from(LIVETRACE_TOML))
 }
 
 // Helper to load or create default config
-fn load_or_default_config_file() -> Result<ConfigFile> {
+pub fn load_or_default_config_file() -> Result<ConfigFile> {
     let config_path = get_config_path()?;
     if config_path.exists() {
         load_config_file(&config_path) // Use existing private helper
@@ -426,6 +427,54 @@ fn apply_profile_to_effective(profile: &ProfileConfig, effective: &mut Effective
 
     if let Some(val) = profile.trace_timeout {
         effective.trace_timeout = val;
+    }
+}
+
+/// Merges two ProfileConfig instances.
+///
+/// Values from `overrides` take precedence if they are `Some`.
+/// Otherwise, the values from `base` are kept.
+pub fn merge_into_profile_config(base: &ProfileConfig, overrides: &ProfileConfig) -> ProfileConfig {
+    ProfileConfig {
+        log_group_pattern: overrides
+            .log_group_pattern
+            .clone()
+            .or_else(|| base.log_group_pattern.clone()),
+        stack_name: overrides
+            .stack_name
+            .clone()
+            .or_else(|| base.stack_name.clone()),
+        otlp_endpoint: overrides
+            .otlp_endpoint
+            .clone()
+            .or_else(|| base.otlp_endpoint.clone()),
+        otlp_headers: overrides
+            .otlp_headers
+            .clone()
+            .or_else(|| base.otlp_headers.clone()),
+        aws_region: overrides
+            .aws_region
+            .clone()
+            .or_else(|| base.aws_region.clone()),
+        aws_profile: overrides
+            .aws_profile
+            .clone()
+            .or_else(|| base.aws_profile.clone()),
+        forward_only: overrides.forward_only.or(base.forward_only),
+        attrs: overrides.attrs.clone().or_else(|| base.attrs.clone()),
+        event_severity_attribute: overrides
+            .event_severity_attribute
+            .clone()
+            .or_else(|| base.event_severity_attribute.clone()),
+        poll_interval: overrides.poll_interval.or(base.poll_interval),
+        session_timeout: overrides.session_timeout.or(base.session_timeout),
+        theme: overrides.theme.clone().or_else(|| base.theme.clone()),
+        color_by: overrides.color_by.or(base.color_by),
+        events_only: overrides.events_only.or(base.events_only),
+        trace_timeout: overrides.trace_timeout.or(base.trace_timeout),
+        // Note: monochrome is deprecated, so we don't explicitly merge it.
+        // If needed for backward compat, theme should handle it.
+        monochrome: base.monochrome, // Keep base value if needed elsewhere, but don't merge overrides
     }
 }
 
@@ -707,5 +756,73 @@ aws-region = "us-west-1"
 
         // event_severity_attribute from global (not overridden by 'dev')
         assert_eq!(effective.event_severity_attribute, "global.severity");
+    }
+
+    #[test]
+    fn test_merge_into_profile_config() {
+        let base = ProfileConfig {
+            log_group_pattern: Some(vec!["base-pattern".to_string()]),
+            stack_name: Some("base-stack".to_string()),
+            otlp_endpoint: Some("http://base:4318".to_string()),
+            otlp_headers: None,
+            aws_region: Some("us-east-1".to_string()),
+            aws_profile: None,
+            forward_only: Some(false),
+            attrs: Some("base.*".to_string()),
+            event_severity_attribute: None,
+            poll_interval: Some(10),
+            session_timeout: None,
+            theme: Some("base-theme".to_string()),
+            color_by: Some(ColoringMode::Service),
+            events_only: Some(false),
+            trace_timeout: None,
+            monochrome: None,
+        };
+
+        let overrides = ProfileConfig {
+            log_group_pattern: None, // Keep base
+            stack_name: Some("override-stack".to_string()), // Override base
+            otlp_endpoint: None,     // Keep base
+            otlp_headers: Some(vec!["override-header".to_string()]), // Add new
+            aws_region: Some("us-west-2".to_string()), // Override base
+            aws_profile: None, // Keep base (None)
+            forward_only: Some(true), // Override base
+            attrs: None,       // Keep base
+            event_severity_attribute: Some("override.severity".to_string()), // Add new
+            poll_interval: None, // Keep base
+            session_timeout: Some(99), // Add new
+            theme: None, // Keep base
+            color_by: Some(ColoringMode::Span), // Override base
+            events_only: None, // Keep base
+            trace_timeout: Some(20), // Add new
+            monochrome: None,
+        };
+
+        let merged = merge_into_profile_config(&base, &overrides);
+
+        // --- Assertions ---
+        // Kept from base
+        assert_eq!(merged.log_group_pattern, base.log_group_pattern);
+        assert_eq!(merged.otlp_endpoint, base.otlp_endpoint);
+        assert_eq!(merged.aws_profile, base.aws_profile);
+        assert_eq!(merged.attrs, base.attrs);
+        assert_eq!(merged.poll_interval, base.poll_interval);
+        assert_eq!(merged.theme, base.theme);
+        assert_eq!(merged.events_only, base.events_only);
+
+        // Overridden by overrides
+        assert_eq!(merged.stack_name, overrides.stack_name);
+        assert_eq!(merged.aws_region, overrides.aws_region);
+        assert_eq!(merged.forward_only, overrides.forward_only);
+        assert_eq!(merged.color_by, overrides.color_by);
+
+        // Added by overrides
+        assert_eq!(merged.otlp_headers, overrides.otlp_headers);
+        assert_eq!(
+            merged.event_severity_attribute,
+            overrides.event_severity_attribute
+        );
+        assert_eq!(merged.session_timeout, overrides.session_timeout);
+        assert_eq!(merged.trace_timeout, overrides.trace_timeout);
     }
 }

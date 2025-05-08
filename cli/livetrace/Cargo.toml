@@ -53,6 +53,7 @@ chrono = { workspace = true, features = ["clock"] }
 
 
 toml.workspace = true
+indexmap = { workspace = true, features = ["serde"] }
 
 globset.workspace = true
 # New dependency
@@ -63,6 +64,3 @@ terminal_size = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-
-[package.metadata.cargo-machete]
-ignored = ["prettytable-rs"]

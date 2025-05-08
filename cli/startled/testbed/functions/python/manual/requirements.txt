@@ -1,0 +1,1 @@
+lambda-otel-lite>=0.15.0

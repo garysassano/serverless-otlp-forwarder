@@ -1,0 +1,527 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: AWS SAM template for the serverless-otlp-forwarder benchmark.
+
+Metadata:
+  Description: >
+    AWS SAM template for the serverless-otlp-forwarder benchmark.
+    This template is used to deploy the serverless-otlp-forwarder benchmark to AWS.
+    The benchmark is used to test the performance of the serverless-otlp-forwarder.
+    The benchmark is used to test the performance of the serverless-otlp-forwarder.
+    The benchmark is used to test the performance of the serverless-otlp-forwarder.
+    The benchmark is used to test the performance of the serverless-otlp-forwarder.
+
+Globals:
+  Api:
+    OpenApiVersion: 3.0.1
+
+Mappings:
+  # Note: This list of layer arns is for us-east-1 only.
+  # Last versions on May 2, 2025
+  # otel https://github.com/open-telemetry/opentelemetry-lambda/releases
+  # adot https://github.com/aws-observability/aws-otel-lambda
+  # appsignals https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Application-Signals-Enable-LambdaMain.html
+  CollectorLayers:
+    Generic: # Dummy TopLevelKey
+      otel: 'arn:aws:lambda:us-east-1:184161586896:layer:opentelemetry-collector-arm64-0_14_0:1' # Generic Otel Collector
+      adot: 'arn:aws:lambda:us-east-1:901920570463:layer:aws-otel-collector-arm64-ver-0-115-0:3' # ADOT Collector (for Rust)
+      rotel: 'arn:aws:lambda:us-east-1:418653438961:layer:rotel-extension-arm64-alpha:20'     # Rotel Collector (for Rust)
+  LanguageLayers:
+    python:
+      adot: 'arn:aws:lambda:us-east-1:901920570463:layer:aws-otel-python-arm64-ver-1-29-0:2'
+      otel: 'arn:aws:lambda:us-east-1:184161586896:layer:opentelemetry-python-0_13_0:1'
+      rotel: 'arn:aws:lambda:us-east-1:184161586896:layer:opentelemetry-python-0_13_0:1'
+      appsignals: 'arn:aws:lambda:us-east-1:615299751070:layer:AWSOpenTelemetryDistroPython:12'
+    nodejs:
+      adot: 'arn:aws:lambda:us-east-1:901920570463:layer:aws-otel-nodejs-arm64-ver-1-30-1:2'
+      otel: 'arn:aws:lambda:us-east-1:184161586896:layer:opentelemetry-nodejs-0_13_0:1'
+      rotel: 'arn:aws:lambda:us-east-1:184161586896:layer:opentelemetry-nodejs-0_13_0:1'  # 12 and 13 are not working with the rotel collector
+      appsignals: 'arn:aws:lambda:us-east-1:615299751070:layer:AWSOpenTelemetryDistroJs:6'
+
+Globals:
+  Function:
+    Architectures:
+      - arm64
+    Timeout: 10
+    MemorySize: 128
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: INFO
+      SystemLogLevel: INFO
+    Tracing: Active
+    Environment:
+      Variables:
+        # the version of the 0.13.0 otel-python layer throws error:
+        # https://github.com/open-telemetry/opentelemetry-python-contrib/blob/v0.53b0/opentelemetry-instrumentation/src/opentelemetry/instrumentation/auto_instrumentation/_load.py#L85-L95
+        # this fills up the logs and slow the function down during startup
+        OTEL_METRICS_EXPORTER: none
+        OTEL_LOGS_EXPORTER: none
+        OTEL_TRACES_EXPORTER: otlp
+        OTEL_PYTHON_DISABLED_INSTRUMENTATIONS: aiohttp,aiohttp-client,asyncpg,boto,celery,django,elasticsearch,falcon,fastapi,flask,grpc_aio_client,grpc_aio_server,grpc_client,grpc_server,jinja2,mysql,psycopg2,pymemcache,pymongo,pymysql,pyramid,redis,sqlalchemy,starlette,tornado
+        OTEL_NODE_DISABLED_INSTRUMENTATIONS: amqplib,bunyan,cassandra-driver,connect,cucumber,dataloader,dns,express,generic-pool,graphql,grpc,hapi,http,ioredis,kafkajs,knex,koa,lru-memoizer,memcached,mongodb,mongoose,mysql2,mysql,nestjs-core,net,pg,pino,redis,redis-4,restify,router,socket.io,tedious,undici,winston
+        OTEL_TRACES_SAMPLER: always_on
+
+        OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:4318
+        OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+        MOCK_OTLP_ENDPOINT: !Sub 'https://${MockOTLPReceiver}.execute-api.${AWS::Region}.amazonaws.com'
+Resources:
+  RustStdout:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub 'rust-stdout'
+      CodeUri: functions/rust/stdout/
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'rust-stdout'
+          LAMBDA_EXTENSION_SPAN_PROCESSOR_MODE: sync
+  RustStdoutAsync:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub 'rust-async'
+      CodeUri: functions/rust/stdout/
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'rust-async'
+          LAMBDA_EXTENSION_SPAN_PROCESSOR_MODE: async
+
+  RustOtel:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub 'rust-otel'
+      CodeUri: functions/rust/collector/
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'rust-otel'
+          OPENTELEMETRY_COLLECTOR_CONFIG_URI: '/opt/otel/collector.yaml'
+      Layers:
+        - !FindInMap [CollectorLayers, Generic, otel]
+        - !Ref CollectorConfiglLayer
+
+  RustAdot:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub 'rust-adot'
+      CodeUri: functions/rust/collector/
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'rust-adot'
+          OPENTELEMETRY_COLLECTOR_CONFIG_URI: '/opt/adot/collector.yaml'
+      Layers:
+        - !FindInMap [CollectorLayers, Generic, adot]
+        - !Ref CollectorConfiglLayer
+
+  RustRotel:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub 'rust-rotel'
+      CodeUri: functions/rust/collector/
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'rust-rotel'
+          ROTEL_ENV_FILE: /opt/rotel/rotel.env
+      Layers:
+        - !FindInMap [CollectorLayers, Generic, rotel]
+        - !Ref CollectorConfiglLayer
+
+  NodeStdout:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: 'es2022'
+        Format: 'cjs'
+        Platform: 'node'
+        EntryPoints: 
+          - index.js
+          - init.js
+    Properties:
+      FunctionName: !Sub 'node-stdout'
+      CodeUri: functions/nodejs/manual/
+      Handler: index.handler
+      Runtime: nodejs22.x
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'node-stdout'
+          LAMBDA_EXTENSION_SPAN_PROCESSOR_MODE: sync
+          NODE_OPTIONS: --require /var/task/init.js
+  
+  NodeStdoutAsync:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: 'es2022'
+        Format: 'cjs'
+        Platform: 'node'
+        EntryPoints: 
+          - index.js
+          - init.js
+    Properties:
+      FunctionName: !Sub 'node-async'
+      CodeUri: functions/nodejs/manual/
+      Handler: index.handler
+      Runtime: nodejs22.x
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'node-async'
+          LAMBDA_EXTENSION_SPAN_PROCESSOR_MODE: async
+          NODE_OPTIONS: --require /var/task/init.js
+  
+  NodeOtel:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: 'es2022'
+        Format: 'cjs'
+        Platform: 'node'
+        EntryPoints: 
+          - index.js
+    Properties:
+      FunctionName: !Sub 'node-otel'
+      CodeUri: functions/nodejs/auto/
+      Handler: index.handler
+      Runtime: nodejs22.x
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'node-otel'
+          OPENTELEMETRY_COLLECTOR_CONFIG_URI: '/opt/otel/collector.yaml'
+          AWS_LAMBDA_EXEC_WRAPPER: /opt/otel-handler
+      Layers:
+        - !FindInMap [LanguageLayers, nodejs, otel]
+        - !FindInMap [CollectorLayers, Generic, otel]
+        - !Ref CollectorConfiglLayer
+
+  NodeRotel:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: 'es2022'
+        Format: 'cjs'
+        Platform: 'node'
+        EntryPoints: 
+          - index.js
+    Properties:
+      FunctionName: !Sub 'node-rotel'
+      CodeUri: functions/nodejs/auto/
+      Handler: index.handler
+      Runtime: nodejs22.x
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'node-rotel'
+          AWS_LAMBDA_EXEC_WRAPPER: /opt/otel-handler
+          ROTEL_ENV_FILE: /opt/rotel/rotel.env
+          OTEL_OTLP_ENDPOINT: http://localhost:4318
+          OTEL_OTLP_PROTOCOL: http/protobuf
+      Layers:
+        - !FindInMap [LanguageLayers, nodejs, rotel]
+        - !FindInMap [CollectorLayers, Generic, rotel]
+        - !Ref CollectorConfiglLayer
+
+  NodeAdot:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: 'es2022'
+        Format: 'cjs'
+        Platform: 'node'
+        EntryPoints: 
+          - index.js
+    Properties:
+      FunctionName: !Sub 'node-adot'
+      CodeUri: functions/nodejs/auto/
+      Handler: index.handler
+      Runtime: nodejs22.x
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'node-adot'
+          AWS_LAMBDA_EXEC_WRAPPER: /opt/otel-handler
+          OPENTELEMETRY_COLLECTOR_CONFIG_URI: '/opt/adot/collector.yaml'
+      Layers:
+        - !FindInMap [LanguageLayers, nodejs, adot]
+        - !FindInMap [CollectorLayers, Generic, otel]
+        - !Ref CollectorConfiglLayer
+  
+  NodeAppSignals:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: 'es2022'
+        Format: 'cjs'
+        Platform: 'node'
+        EntryPoints: 
+          - index.js
+    Properties:
+      FunctionName: !Sub 'node-signals'
+      CodeUri: functions/nodejs/auto/
+      Handler: index.handler
+      Runtime: nodejs22.x
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'node-signals'
+          AWS_LAMBDA_EXEC_WRAPPER: /opt/otel-instrument
+      Policies:
+        - arn:aws:iam::aws:policy/CloudWatchLambdaApplicationSignalsExecutionRolePolicy
+      Layers:
+        - !FindInMap [LanguageLayers, nodejs, appsignals]
+  
+  PythonStdout:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'python-stdout'
+      CodeUri: functions/python/manual/
+      Handler: main.handler
+      Runtime: python3.13
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'python-stdout'
+          LAMBDA_EXTENSION_SPAN_PROCESSOR_MODE: sync
+
+  PythonStdoutAsync:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'python-async'
+      CodeUri: functions/python/manual/
+      Handler: main.handler
+      Runtime: python3.13
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'python-async'
+          LAMBDA_EXTENSION_SPAN_PROCESSOR_MODE: async
+
+  PythonOtel:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'python-otel'
+      CodeUri: functions/python/auto/
+      Handler: main.handler
+      Runtime: python3.13
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'python-otel'
+          AWS_LAMBDA_EXEC_WRAPPER: /opt/otel-instrument
+          OPENTELEMETRY_COLLECTOR_CONFIG_URI: '/opt/otel/collector.yaml'
+      Layers:
+        - !FindInMap [LanguageLayers, python, otel]
+        - !FindInMap [CollectorLayers, Generic, otel]
+        - !Ref CollectorConfiglLayer
+
+  PythonRotel:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'python-rotel'
+      CodeUri: functions/python/auto/
+      Handler: main.handler
+      Runtime: python3.13
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'python-rotel'
+          AWS_LAMBDA_EXEC_WRAPPER: /opt/otel-instrument
+          ROTEL_ENV_FILE: /opt/rotel/rotel.env
+      Layers:
+        - !FindInMap [LanguageLayers, python, rotel]
+        - !FindInMap [CollectorLayers, Generic, rotel]
+        - !Ref CollectorConfiglLayer
+
+  PythonAdot:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'python-adot'
+      CodeUri: functions/python/auto/
+      Handler: main.handler
+      Runtime: python3.13
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'python-adot'
+          AWS_LAMBDA_EXEC_WRAPPER: /opt/otel-instrument
+          OPENTELEMETRY_COLLECTOR_CONFIG_URI: '/opt/adot/collector.yaml'
+      Layers:
+        - !FindInMap [LanguageLayers, python, otel]
+        - !FindInMap [CollectorLayers, Generic, otel]
+        - !Ref CollectorConfiglLayer
+
+  PythonAppSignals:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'python-signals'
+      CodeUri: functions/python/auto/
+      Handler: main.handler
+      Runtime: python3.13
+      Environment:
+        Variables:
+          OTEL_SERVICE_NAME: !Sub 'python-signals'
+          AWS_LAMBDA_EXEC_WRAPPER: /opt/otel-instrument
+      Policies:
+        - arn:aws:iam::aws:policy/CloudWatchLambdaApplicationSignalsExecutionRolePolicy
+      Layers:
+        - !FindInMap [LanguageLayers, python, appsignals]
+
+  # API Gateway
+  MockOTLPReceiver:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: v1
+      EndpointConfiguration: REGIONAL
+      DefinitionBody:
+        openapi: 3.0.1
+        info:
+          title: !Sub '${AWS::StackName}-mock-otlp-receiver'
+          version: '1.0'
+        paths:
+          /{signal}:
+            post:
+              summary: Mock OTLP/protobuf endpoint for any signal
+              parameters:
+                - name: signal
+                  in: path
+                  required: true
+                  schema:
+                    type: string
+              requestBody:
+                description: OTLP protobuf payload (content ignored by mock)
+                content:
+                  application/x-protobuf: {}
+                required: false
+              x-amazon-apigateway-integration:
+                type: mock
+                requestTemplates:
+                  application/x-protobuf: '{"statusCode": 200}'
+                passthroughBehavior: when_no_match
+                connectionType: INTERNET
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseTemplates:
+                      application/x-protobuf: |
+                        #set($context.responseOverride.header.Content-Type = "application/x-protobuf")
+                    headerParameters:
+                      Content-Type: "'application/x-protobuf'"
+              responses:
+                '200':
+                  description: 'Successful mock response'
+                  content:
+                    application/x-protobuf:
+                      schema:
+                        type: string
+                        format: binary
+
+  # Layer for OTEL Collector Config
+  CollectorConfiglLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub '${AWS::StackName}-otel-config'
+      ContentUri: functions/confmaps/
+    Metadata:
+      BuildMethod: makefile
+
+  # Efficient Rust proxy function used to determine client side duration
+  ProxyFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: proxy
+      Description: 'Generic Rust proxy function used to determine client side duration'
+      CodeUri: ./proxy
+      Handler: bootstrap
+      Runtime: provided.al2023
+      MemorySize: 512
+      Tracing: Active
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - 'lambda:InvokeFunction'
+              Resource: '*'
+
+
+Outputs:
+  ProxyFunctionArn:
+    Description: Proxy Function ARN
+    Value: !GetAtt ProxyFunction.Arn
+
+  # Rust
+  RustStdout:
+    Description: Rust OTLP Stdout Function ARN
+    Value: !GetAtt RustStdout.Arn
+  RustOtel:
+    Description: Rust OTLP Function ARN
+    Value: !GetAtt RustOtel.Arn
+  RustAdot:
+    Description: Rust ADOT Function ARN
+    Value: !GetAtt RustAdot.Arn
+  RustRotel:
+    Description: Rust Rotel Function ARN
+    Value: !GetAtt RustRotel.Arn
+
+  # Node.js
+  NodeStdout:
+    Description: Node.js Manual OTLP Function ARN
+    Value: !GetAtt NodeStdout.Arn
+  NodeOtel:
+    Description: Node.js OpenTelemetry Function ARN
+    Value: !GetAtt NodeOtel.Arn
+  NodeRotel:
+    Description: Node.js Rotel Function ARN
+    Value: !GetAtt NodeRotel.Arn
+  NodeAdot:
+    Description: Node.js ADOT Function ARN
+    Value: !GetAtt NodeAdot.Arn
+  NodeAppSignals:
+    Description: Node.js AppSignals Function ARN
+    Value: !GetAtt NodeAppSignals.Arn
+
+  # Python
+  PythonStdout:
+    Description: Python Manual OTLP Function ARN (Sync)
+    Value: !GetAtt PythonStdout.Arn
+  PythonStdoutAsync:
+    Description: Python Manual OTLP Function ARN (Async)
+    Value: !GetAtt PythonStdoutAsync.Arn
+  PythonOtel:
+    Description: Python OpenTelemetry Function ARN
+    Value: !GetAtt PythonOtel.Arn
+  PythonRotel:
+    Description: Python Rotel Function ARN
+    Value: !GetAtt PythonRotel.Arn
+  PythonAdot:
+    Description: Python ADOT Function ARN
+    Value: !GetAtt PythonAdot.Arn
+  PythonAppSignals:
+    Description: Python AppSignals Function ARN
+    Value: !GetAtt PythonAppSignals.Arn
+
+  MockApiEndpoint:
+    Description: 'API Gateway Mock endpoint URL'
+    Value: !Sub 'https://${MockOTLPReceiver}.execute-api.${AWS::Region}.amazonaws.com/v1/traces'
+

@@ -3,7 +3,7 @@ use crate::processing::TelemetryData;
 use anyhow::Result;
 use chrono::{TimeZone, Utc};
 use colored::*;
-use comfy_table::{presets, TableComponent, Attribute, Cell, CellAlignment, ContentArrangement, Table};
+use comfy_table::{presets, TableComponent, Attribute, Cell, CellAlignment, ContentArrangement, Table, ColumnConstraint, Width::Fixed};
 use globset::GlobSet;
 use opentelemetry_proto::tonic::{
     collector::trace::v1::ExportTraceServiceRequest,
@@ -565,6 +565,24 @@ pub fn display_console(
             Cell::new("Status").add_attribute(Attribute::Bold),
             Cell::new("Timeline").add_attribute(Attribute::Bold),
         ]);
+
+        // Define column widths for constraints
+        let column_widths: [(usize, u16); 6] = [
+            (0, SERVICE_NAME_WIDTH as u16),
+            (1, SPAN_NAME_WIDTH as u16),
+            (2, SPAN_KIND_WIDTH as u16),
+            (3, DURATION_WIDTH as u16),
+            (4, SPAN_ID_WIDTH as u16),
+            (5, STATUS_WIDTH as u16),
+        ];
+
+        // Apply constraints to fixed-width columns (0-5)
+        for (index, width) in &column_widths {
+            if let Some(column) = table.column_mut(*index) {
+                column.set_constraint(ColumnConstraint::UpperBoundary(Fixed(*width)));
+            }
+        }
+
         // --- Add the timeline scale row ---
         if trace_duration_ns > 0 {
             let scale_content =

@@ -1,0 +1,47 @@
+[package]
+name = "startled"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "CLI tool for benchmarking Lambda functions"
+
+[features]
+default = ["screenshots"]
+screenshots = ["headless_chrome"]
+
+[dependencies]
+aws-config.workspace = true
+
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = { workspace = true }
+anyhow.workspace = true
+tracing.workspace = true
+futures.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry-http.workspace = true
+tracing-subscriber.workspace = true
+tracing-opentelemetry.workspace = true
+aws-credential-types = { workspace = true }
+otlp-sigv4-client.workspace = true
+reqwest.workspace = true
+clap = { workspace = true, features = ["derive"] }
+aws-sdk-lambda = { workspace = true }
+base64 = { workspace = true } 
+indicatif = { workspace = true, features = ["improved_unicode"] }
+chrono = { workspace = true, features = ["serde"] }
+tera = { workspace = true }
+headless_chrome = { workspace = true, optional = true }
+aws-sdk-cloudformation = { workspace = true }
+opentelemetry-aws.workspace = true
+statrs = { workspace = true }
+colored = { workspace = true }
+comfy-table = { workspace = true }
+regex = "1.11.1"
+rust_decimal = { version = "1.37.1", features = ["serde-with-arbitrary-precision"] }
+pulldown-cmark = "0.13.0"

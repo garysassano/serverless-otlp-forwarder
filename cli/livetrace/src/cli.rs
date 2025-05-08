@@ -76,7 +76,7 @@ pub struct CliArgs {
     #[arg(long)]
     pub config_profile: Option<String>,
 
-    /// Save the current effective command-line arguments to the specified profile in .livetrace.toml and exit.
+    /// Save the current effective command-line arguments to the specified profile in .livetrace.toml.
     #[arg(long, value_name = "PROFILE_NAME")]
     pub save_profile: Option<String>,
 
