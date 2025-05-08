@@ -1,0 +1,43 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+
+exporters:
+  otlphttp/traces:
+    endpoint: "${env:MOCK_OTLP_ENDPOINT}"
+  otlphttp/metrics:
+    endpoint: "${env:MOCK_OTLP_ENDPOINT}"
+  otlphttp/logs:
+    endpoint: "${env:MOCK_OTLP_ENDPOINT}"
+
+processors:
+  batch:
+    timeout: 200ms
+
+service:
+  pipelines:
+    traces:
+      receivers: 
+        - otlp
+      processors: 
+        - batch
+      exporters: 
+        - otlphttp/traces
+    metrics:
+      receivers: 
+        - otlp
+      processors: 
+        - batch
+      exporters: 
+        - otlphttp/metrics
+    logs:
+      receivers: 
+        - otlp
+      processors: 
+        - batch
+      exporters: 
+        - otlphttp/logs
+  telemetry:
+    metrics:
+      address: localhost:8888
