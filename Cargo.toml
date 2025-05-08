@@ -141,6 +141,3 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"
-
-[patch.crates-io]
-tracing-opentelemetry = { git = "https://github.com/dev7a/tracing-opentelemetry", rev="55880e7de9e4b9098cf83d461af59070f0287869" }
