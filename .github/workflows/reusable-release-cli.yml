@@ -25,6 +25,11 @@ on:
         required: false
         type: string
         default: ''
+      release_notes_file_path:
+        description: 'Optional path to a file containing release notes for the release body.'
+        required: false
+        type: string
+        default: ''
 
 env:
   CARGO_TERM_COLOR: always
@@ -138,6 +143,7 @@ jobs:
         with:
           tag_name: ${{ inputs.tag_name }}
           name: ${{ steps.release_name_generator.outputs.release_name }} # Use the generated name
+          body_path: ${{ inputs.release_notes_file_path || '' }} # Use if provided, else fallback to annotated tag
           draft: false
           prerelease: false 
           files: |

@@ -11,8 +11,6 @@ jobs:
     name: Build and Release startled
     permissions:
       contents: write # Grant write permission for contents to this job
-    # When calling a local reusable workflow, do not specify a version (e.g., @main).
-    # It automatically uses the version from the same commit.
     uses: ./.github/workflows/reusable-release-cli.yml
     with:
       cli_name: "startled"
@@ -20,4 +18,5 @@ jobs:
       binary_name: "startled"
       tag_name: ${{ github.ref_name }}
       build_features: "screenshots"
+      release_notes_file_path: "cli/startled/RELEASE_NOTES.md"
     secrets: inherit
