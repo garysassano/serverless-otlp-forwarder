@@ -28,6 +28,16 @@ on:
         required: false
         type: string
         default: ''
+    outputs:
+      needs_publish:
+        description: 'Indicates if a publish was determined to be necessary by the determine_publish job.'
+        value: ${{ jobs.determine_publish.outputs.needs_publish }}
+      package_version:
+        description: 'The version of the package from Cargo.toml.'
+        value: ${{ jobs.determine_publish.outputs.package_version }}
+      tag_name:
+        description: 'The Git tag name constructed from the package version.'
+        value: ${{ jobs.determine_publish.outputs.tag_name }}
 env:
   CARGO_TERM_COLOR: always
   RUST_VERSION: "1.85" # Consistent with other workflows

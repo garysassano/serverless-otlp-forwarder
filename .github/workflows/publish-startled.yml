@@ -23,3 +23,17 @@ jobs:
       cargo_token_secret_name: "CARGO_REGISTRY_TOKEN" # Using the common secret
       test_features: "screenshots" # startled has a 'screenshots' feature
     secrets: inherit # Pass down secrets like CARGO_REGISTRY_TOKEN
+
+  create_github_release:
+    name: Create GitHub Release for startled
+    needs: publish_startled_crate
+    if: needs.publish_startled_crate.outputs.needs_publish == 'true'
+    uses: ./.github/workflows/reusable-release-cli.yml
+    with:
+      cli_name: "startled"
+      manifest_path: "cli/startled/Cargo.toml"
+      binary_name: "startled"
+      tag_name: ${{ needs.publish_startled_crate.outputs.tag_name }}
+      build_features: "screenshots"
+      release_notes_file_path: "cli/startled/RELEASE_NOTES.md"
+    secrets: inherit
