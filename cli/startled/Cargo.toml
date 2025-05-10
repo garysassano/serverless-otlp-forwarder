@@ -10,7 +10,7 @@ repository = "https://github.com/dev7a/serverless-otlp-forwarder/tree/main/cli/s
 documentation = "https://docs.rs/startled"
 readme = "README.md"
 keywords = ["lambda", "cli", "benchmark", "performance", "serverless"]
-categories = ["command-line-utilities", "development-tools::profiling", "cloud-computing"]
+categories = ["command-line-utilities", "development-tools::profiling"]
 exclude = ["testbed/"]
 
 [features]
