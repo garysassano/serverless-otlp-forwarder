@@ -10,6 +10,9 @@ on:
       # though this can lead to many runs if not managed carefully.
       # - '.github/workflows/reusable-publish-rust-crate.yml'
 
+permissions:
+  contents: write # Needed to allow reusable workflow to push tags
+
 jobs:
   publish_startled_crate:
     name: Publish startled to Crates.io and Tag

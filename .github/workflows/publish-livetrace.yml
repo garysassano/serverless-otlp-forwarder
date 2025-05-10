@@ -9,6 +9,9 @@ on:
       # Also consider triggering if the reusable workflow itself changes.
       # - '.github/workflows/reusable-publish-rust-crate.yml'
 
+permissions:
+  contents: write # Needed to allow reusable workflow to push tags
+
 jobs:
   publish_livetrace_crate:
     name: Publish livetrace to Crates.io and Tag
