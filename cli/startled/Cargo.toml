@@ -9,7 +9,7 @@ description = "CLI tool for benchmarking Lambda functions"
 repository = "https://github.com/dev7a/serverless-otlp-forwarder/tree/main/cli/startled"
 documentation = "https://docs.rs/startled"
 readme = "README.md"
-keywords = ["aws", "lambda", "cli", "benchmark", "performance", "serverless", "faas"]
+keywords = ["lambda", "cli", "benchmark", "performance", "serverless"]
 categories = ["command-line-utilities", "development-tools::profiling", "cloud-computing"]
 exclude = ["testbed/"]
 
