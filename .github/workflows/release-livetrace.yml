@@ -9,6 +9,8 @@ on:
 jobs:
   release_cli:
     name: Build and Release livetrace
+    permissions:
+      contents: write # Grant write permission for contents to this job
     # When calling a local reusable workflow, do not specify a version (e.g., @main).
     # It automatically uses the version from the same commit.
     uses: ./.github/workflows/reusable-release-cli.yml
