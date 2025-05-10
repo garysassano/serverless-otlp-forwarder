@@ -1,0 +1,21 @@
+# .github/workflows/release-livetrace.yml
+name: Release livetrace CLI
+
+on:
+  push:
+    tags:
+      - 'cli/livetrace-v*'
+
+jobs:
+  release_cli:
+    name: Build and Release livetrace
+    # When calling a local reusable workflow, do not specify a version (e.g., @main).
+    # It automatically uses the version from the same commit.
+    uses: ./.github/workflows/reusable-release-cli.yml
+    with:
+      cli_name: "livetrace"
+      manifest_path: "cli/livetrace/Cargo.toml"
+      binary_name: "livetrace"
+      tag_name: ${{ github.ref_name }}
+      # build_features: "" # Default is empty, explicitly shown for clarity
+    secrets: inherit

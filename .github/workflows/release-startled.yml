@@ -1,0 +1,21 @@
+# .github/workflows/release-startled.yml
+name: Release startled CLI
+
+on:
+  push:
+    tags:
+      - 'cli/startled-v*'
+
+jobs:
+  release_cli:
+    name: Build and Release startled
+    # When calling a local reusable workflow, do not specify a version (e.g., @main).
+    # It automatically uses the version from the same commit.
+    uses: ./.github/workflows/reusable-release-cli.yml
+    with:
+      cli_name: "startled"
+      manifest_path: "cli/startled/Cargo.toml"
+      binary_name: "startled"
+      tag_name: ${{ github.ref_name }}
+      build_features: "screenshots"
+    secrets: inherit
