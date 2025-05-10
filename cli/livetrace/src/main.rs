@@ -1,3 +1,8 @@
+#![doc = include_str!("../README.md")]
+//! `livetrace` is a Command Line Interface (CLI) tool for real-time tailing 
+//! of AWS CloudWatch Logs, specifically designed to capture and forward 
+//! OTLP (OpenTelemetry Protocol) traces and logs.
+
 // Crate Modules
 mod aws_setup;
 mod cli;

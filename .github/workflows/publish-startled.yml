@@ -1,0 +1,24 @@
+name: Publish startled CLI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'cli/startled/**'
+      # Also consider triggering if the reusable workflow itself changes,
+      # though this can lead to many runs if not managed carefully.
+      # - '.github/workflows/reusable-publish-rust-crate.yml'
+
+jobs:
+  publish_startled_crate:
+    name: Publish startled to Crates.io and Tag
+    uses: ./.github/workflows/reusable-publish-rust-crate.yml
+    with:
+      crate_name: "startled"
+      crate_path: "cli/startled"
+      manifest_path: "cli/startled/Cargo.toml"
+      tag_prefix: "cli/startled-v"
+      cargo_token_secret_name: "CARGO_REGISTRY_TOKEN" # Using the common secret
+      test_features: "screenshots" # startled has a 'screenshots' feature
+    secrets: inherit # Pass down secrets like CARGO_REGISTRY_TOKEN

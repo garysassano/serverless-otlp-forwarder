@@ -1,0 +1,157 @@
+name: Reusable Publish Rust Crate
+
+on:
+  workflow_call:
+    inputs:
+      crate_name:
+        description: 'Name of the crate (e.g., "startled")'
+        required: true
+        type: string
+      crate_path:
+        description: 'Path to the crate directory (e.g., "cli/startled")'
+        required: true
+        type: string
+      manifest_path:
+        description: 'Path to the Cargo.toml for the crate (e.g., "cli/startled/Cargo.toml")'
+        required: true
+        type: string
+      tag_prefix:
+        description: 'Prefix for the Git tag (e.g., "cli/startled-v")'
+        required: true
+        type: string
+      cargo_token_secret_name:
+        description: 'Name of the GitHub secret containing the Cargo registry token'
+        required: true
+        type: string
+      test_features:
+        description: 'Comma-separated list of features to enable during test and build'
+        required: false
+        type: string
+        default: ''
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: "1.85" # Consistent with other workflows
+
+permissions:
+  contents: write # Needed for pushing tags
+  # id-token: write # Add if using OIDC for crates.io publishing in the future
+
+jobs:
+  determine_publish:
+    name: Determine if ${{ inputs.crate_name }} needs publishing
+    runs-on: ubuntu-latest
+    outputs:
+      needs_publish: ${{ steps.version_check.outputs.needs_publish }}
+      package_version: ${{ steps.version_check.outputs.package_version }}
+      tag_name: ${{ steps.version_check.outputs.tag_name }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.crate_path }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Required to fetch all tags for version checking
+
+      - name: Set up Rust toolchain (for cargo metadata)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Extract version and check tag for ${{ inputs.crate_name }}
+        id: version_check
+        run: |
+          PACKAGE_VERSION=$(cargo metadata --no-deps --manifest-path ${{ inputs.manifest_path }} --format-version 1 | jq -r '.packages[] | select(.name == "${{ inputs.crate_name }}") | .version')
+          if [ -z "$PACKAGE_VERSION" ]; then
+            echo "Error: Could not extract package version for ${{ inputs.crate_name }} from ${{ inputs.manifest_path }}"
+            exit 1
+          fi
+          echo "Package version from Cargo.toml: $PACKAGE_VERSION"
+
+          TAG_NAME="${{ inputs.tag_prefix }}$PACKAGE_VERSION"
+          echo "Constructed tag name: $TAG_NAME"
+          
+          echo "package_version=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+
+          # Check if tag already exists
+          if git tag -l | grep -Fxq "$TAG_NAME"; then
+            echo "Tag $TAG_NAME already exists. ${{ inputs.crate_name }} version $PACKAGE_VERSION is likely already published or tagged."
+            echo "needs_publish=false" >> $GITHUB_OUTPUT
+          else
+            echo "Tag $TAG_NAME does not exist. ${{ inputs.crate_name }} version $PACKAGE_VERSION needs to be published and tagged."
+            echo "needs_publish=true" >> $GITHUB_OUTPUT
+          fi
+        working-directory: . # Run cargo metadata from repo root, but manifest_path is relative to root
+
+  test_and_lint:
+    name: Test & Lint ${{ inputs.crate_name }}
+    needs: determine_publish
+    if: needs.determine_publish.outputs.needs_publish == 'true'
+    runs-on: ubuntu-latest # Can be matrix if needed for specific crate tests
+    defaults:
+      run:
+        working-directory: ${{ inputs.crate_path }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt, clippy
+
+      - name: Set up Rust cache for ${{ inputs.crate_name }}
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: publish-${{ inputs.crate_name }}-${{ runner.os }}-${{ hashFiles(format('{0}/Cargo.lock', inputs.crate_path)) }}
+
+      - name: Run quality checks for ${{ inputs.crate_name }}
+        run: |
+          FEATURES_ARG=""
+          if [[ -n "${{ inputs.test_features }}" ]]; then
+            FEATURES_ARG="--features ${{ inputs.test_features }}"
+          fi
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings $FEATURES_ARG 
+          cargo test $FEATURES_ARG
+          cargo build --release $FEATURES_ARG
+
+  publish_and_tag:
+    name: Publish ${{ inputs.crate_name }} to Crates.io and Tag
+    needs: [determine_publish, test_and_lint]
+    if: needs.determine_publish.outputs.needs_publish == 'true' # Redundant due to test_and_lint's if, but good for clarity
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.crate_path }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Ensure we have the full history for tagging if needed, though tag is based on version
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      
+      - name: Publish ${{ inputs.crate_name }} to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets[inputs.cargo_token_secret_name] }}
+        run: cargo publish --manifest-path ${{ inputs.manifest_path }}
+        working-directory: . # cargo publish needs to be run from where Cargo.toml is, or use --manifest-path relative to current dir
+
+      - name: Create and push Git tag
+        env:
+          GIT_COMMITTER_NAME: "github-actions[bot]"
+          GIT_COMMITTER_EMAIL: "github-actions[bot]@users.noreply.github.com"
+          GIT_AUTHOR_NAME: "github-actions[bot]"
+          GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
+        run: |
+          TAG_TO_PUSH="${{ needs.determine_publish.outputs.tag_name }}"
+          echo "Creating and pushing tag: $TAG_TO_PUSH"
+          git tag "$TAG_TO_PUSH"
+          git push origin "$TAG_TO_PUSH"
+        working-directory: . # Run git commands from repo root

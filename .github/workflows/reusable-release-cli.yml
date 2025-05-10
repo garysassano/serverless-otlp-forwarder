@@ -138,6 +138,18 @@ jobs:
           echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
           echo "Generated Release Name: $RELEASE_NAME"
 
+      - name: Check for pre-release version in tag
+        id: prerelease_check
+        run: |
+          TAG_NAME="${{ inputs.tag_name }}"
+          # Simple check for common pre-release identifiers like -alpha, -beta, -rc
+          # This also implicitly handles variants like -alpha.1, -beta.2
+          if [[ "$TAG_NAME" == *-alpha* || "$TAG_NAME" == *-beta* || "$TAG_NAME" == *-rc* ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
@@ -145,7 +157,7 @@ jobs:
           name: ${{ steps.release_name_generator.outputs.release_name }} # Use the generated name
           body_path: ${{ inputs.release_notes_file_path || '' }} # Use if provided, else fallback to annotated tag
           draft: false
-          prerelease: false 
+          prerelease: ${{ steps.prerelease_check.outputs.is_prerelease }}
           files: |
             all-cli-binaries/${{ inputs.cli_name }}-linux-amd64/*
             all-cli-binaries/${{ inputs.cli_name }}-macos-amd64/*

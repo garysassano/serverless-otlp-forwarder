@@ -1,0 +1,23 @@
+name: Publish livetrace CLI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'cli/livetrace/**'
+      # Also consider triggering if the reusable workflow itself changes.
+      # - '.github/workflows/reusable-publish-rust-crate.yml'
+
+jobs:
+  publish_livetrace_crate:
+    name: Publish livetrace to Crates.io and Tag
+    uses: ./.github/workflows/reusable-publish-rust-crate.yml
+    with:
+      crate_name: "livetrace"
+      crate_path: "cli/livetrace"
+      manifest_path: "cli/livetrace/Cargo.toml"
+      tag_prefix: "cli/livetrace-v"
+      cargo_token_secret_name: "CARGO_REGISTRY_TOKEN" # Using the common secret
+      test_features: "" # livetrace does not have specific features listed for this
+    secrets: inherit # Pass down secrets like CARGO_REGISTRY_TOKEN
