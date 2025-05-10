@@ -114,7 +114,7 @@ jobs:
             FEATURES_ARG="--features ${{ inputs.test_features }}"
           fi
           cargo fmt --check
-          cargo clippy --all-targets -- -D warnings $FEATURES_ARG 
+          cargo clippy --all-targets $FEATURES_ARG -- -D warnings 
           cargo test $FEATURES_ARG
           cargo build --release $FEATURES_ARG
 
