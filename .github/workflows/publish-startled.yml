@@ -6,9 +6,7 @@ on:
       - main
     paths:
       - 'cli/startled/**'
-      # Also consider triggering if the reusable workflow itself changes,
-      # though this can lead to many runs if not managed carefully.
-      # - '.github/workflows/reusable-publish-rust-crate.yml'
+  workflow_dispatch:
 
 permissions:
   contents: write # Needed to allow reusable workflow to push tags

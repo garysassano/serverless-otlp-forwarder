@@ -6,8 +6,7 @@ on:
       - main
     paths:
       - 'cli/livetrace/**'
-      # Also consider triggering if the reusable workflow itself changes.
-      # - '.github/workflows/reusable-publish-rust-crate.yml'
+  workflow_dispatch:
 
 permissions:
   contents: write # Needed to allow reusable workflow to push tags
