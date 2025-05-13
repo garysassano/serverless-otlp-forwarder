@@ -42,6 +42,8 @@
 -   **Optional Chart Screenshots**:
     -   Can generate PNG screenshots of the report charts (requires the `screenshots` compile-time feature and a headless Chrome environment).
 
+![Image](https://github.com/user-attachments/assets/29314c03-46e6-41de-b695-6aced7690f17)
+
 ## Prerequisites
 
 -   **Rust and Cargo**: Necessary for building and installing `startled` from source. ([Install Rust](https://www.rust-lang.org/tools/install))
