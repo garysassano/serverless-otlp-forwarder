@@ -4,6 +4,8 @@
 
 `startled` (Start Time And Response Timing Latency Evaluation & Diagnostics) is a command-line tool for detailed performance analysis of AWS Lambda functions. It provides comprehensive data on cold starts, warm invocations, memory usage, and critically, the performance impact of Lambda Extensions. This makes it an effective utility for evaluating OpenTelemetry (Otel) solutions, custom layers, and other components that integrate with the Lambda execution environment.
 
+[video](https://github.com/user-attachments/assets/15bcf2ee-1fad-4fd7-a2c0-02918f411ae6)
+
 ## Key Features
 
 -   **Flexible Benchmarking Targets**:
@@ -44,7 +46,6 @@
 
 -   **Rust and Cargo**: Necessary for building and installing `startled` from source. ([Install Rust](https://www.rust-lang.org/tools/install))
 -   **AWS CLI**: Must be configured with appropriate credentials and permissions for AWS Lambda and CloudFormation interactions. ([Configure AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-quickstart.html))
--   **Docker**: (If using the `benchmark/testbed/` or building Lambda functions with SAM) SAM CLI relies on Docker for packaging Lambda deployment artifacts.
 
 ## Installation
 
@@ -55,7 +56,6 @@ Once `startled` is published to crates.io, you can install it directly using Car
 ```bash
 cargo install startled
 ```
-*(Note: This command will work after `startled` is published to crates.io.)*
 
 ### From Source
 
