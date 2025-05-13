@@ -4,7 +4,7 @@
 
 `startled` (Start Time And Response Timing Latency Evaluation & Diagnostics) is a command-line tool for detailed performance analysis of AWS Lambda functions. It provides comprehensive data on cold starts, warm invocations, memory usage, and critically, the performance impact of Lambda Extensions. This makes it an effective utility for evaluating OpenTelemetry (Otel) solutions, custom layers, and other components that integrate with the Lambda execution environment.
 
-[video](https://github.com/user-attachments/assets/15bcf2ee-1fad-4fd7-a2c0-02918f411ae6)
+[video of single function benchmark](https://github.com/user-attachments/assets/15bcf2ee-1fad-4fd7-a2c0-02918f411ae6)
 
 ## Key Features
 
