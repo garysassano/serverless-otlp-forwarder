@@ -1,4 +1,6 @@
-# OTLP Stdout livetrace
+# `livetrace` CLI
+
+**Tail your Lambda traces. From the console.**
 
 `livetrace` is a command-line tool designed to enhance local development workflows when working with distributed tracing in serverless environments using the [Serverless OTLP Forwarder Architecture](https://dev7a.github.io/serverless-otlp-forwarder/architecture/).
 
@@ -163,7 +165,7 @@ You must specify at least one of the following to identify the log groups. They 
     # Poll every 10 seconds, but exit after 5 minutes total
     livetrace --stack-name my-app --poll-interval 10s --session-timeout 5m
     ```
-[!NOTE]
+> [!NOTE]
 > Live Tail mode is the default, but it's not free, at 1c/minute. For long sessions, it's probably better to use the `FilterLogEvents` API with a polling interval.
 
 ### OTLP Forwarding
