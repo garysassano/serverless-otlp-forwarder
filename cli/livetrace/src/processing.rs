@@ -344,7 +344,9 @@ mod tests {
 
         let json_message = serde_json::to_string(&exporter_output).unwrap();
 
-        let result = process_log_event_message(&json_message).unwrap();
+        let result = process_log_event_message(&json_message); // grep_regex argument removed
+        assert!(result.is_ok());
+        let result = result.unwrap();
 
         assert!(result.is_some());
         let telemetry_data = result.unwrap();
@@ -461,8 +463,9 @@ mod tests {
     #[test]
     fn test_process_log_event_message_invalid_json() {
         let invalid_json_message = "{ not json \"";
-        let result = process_log_event_message(invalid_json_message).unwrap();
-        assert!(result.is_none()); // Expect Ok(None) for parsing errors
+        let result = process_log_event_message(invalid_json_message); // grep_regex argument removed
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none()); // Expect Ok(None) for parsing errors
     }
 
     #[test]
@@ -485,7 +488,7 @@ mod tests {
         let json_message = serde_json::to_string(&exporter_output).unwrap();
 
         // Expect an Err result because base64 decoding fails
-        let result = process_log_event_message(&json_message);
+        let result = process_log_event_message(&json_message); // grep_regex argument removed
         assert!(result.is_err());
         // Optionally check the error message content
         assert!(result
@@ -515,7 +518,7 @@ mod tests {
         let json_message = serde_json::to_string(&exporter_output).unwrap();
 
         // Expect an Err result because gzip decoding fails
-        let result = process_log_event_message(&json_message);
+        let result = process_log_event_message(&json_message); // grep_regex argument removed
         assert!(result.is_err()); // Just check that it errors, context might be less specific
                                   // assert!(result.unwrap_err().to_string().contains("Failed to decompress Gzip payload")); // Removed specific context check
     }
